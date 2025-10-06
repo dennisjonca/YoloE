@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YOLOv8 Webcam Inference</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 30px;
+            max-width: 1200px;
+            width: 100%;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+
+        .subtitle {
+            color: #666;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .video-container {
+            position: relative;
+            width: 100%;
+            max-width: 960px;
+            margin: 0 auto;
+            background: #000;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        #videoElement {
+            width: 100%;
+            display: block;
+        }
+
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        .controls {
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 25px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 0 10px;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        button:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .stats {
+            margin-top: 20px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 28px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .status {
+            text-align: center;
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎯 YOLOv8 Webcam Inference</h1>
+        <p class="subtitle">Real-time object detection and tracking with bounding boxes</p>
+        
+        <div class="video-container">
+            <video id="videoElement" autoplay playsinline></video>
+            <canvas id="canvas"></canvas>
+        </div>
+
+        <div class="controls">
+            <button id="startButton">Start Camera</button>
+            <button id="stopButton" disabled>Stop Camera</button>
+        </div>
+
+        <div id="status" class="status info">
+            Click "Start Camera" to begin detection
+        </div>
+
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-value" id="fpsValue">0</div>
+                <div class="stat-label">FPS</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="objectCount">0</div>
+                <div class="stat-label">Objects Detected</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="trackCount">0</div>
+                <div class="stat-label">Tracked Objects</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const video = document.getElementById('videoElement');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const statusDiv = document.getElementById('status');
+        const fpsValue = document.getElementById('fpsValue');
+        const objectCount = document.getElementById('objectCount');
+        const trackCount = document.getElementById('trackCount');
+
+        let stream = null;
+        let isRunning = false;
+        let frameCount = 0;
+        let lastTime = Date.now();
+        let fps = 0;
+
+        // Color palette for different classes
+        const colors = [
+            '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8',
+            '#F7DC6F', '#BB8FCE', '#85C1E2', '#F8B739', '#52B788'
+        ];
+
+        function getColorForClass(className) {
+            let hash = 0;
+            for (let i = 0; i < className.length; i++) {
+                hash = className.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            return colors[Math.abs(hash) % colors.length];
+        }
+
+        function updateStatus(message, type = 'info') {
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+        }
+
+        function updateFPS() {
+            frameCount++;
+            const currentTime = Date.now();
+            const elapsed = currentTime - lastTime;
+            
+            if (elapsed >= 1000) {
+                fps = Math.round((frameCount * 1000) / elapsed);
+                fpsValue.textContent = fps;
+                frameCount = 0;
+                lastTime = currentTime;
+            }
+        }
+
+        async function startCamera() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { 
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    } 
+                });
+                video.srcObject = stream;
+                
+                video.addEventListener('loadedmetadata', () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    isRunning = true;
+                    startButton.disabled = true;
+                    stopButton.disabled = false;
+                    updateStatus('Camera started successfully', 'success');
+                    processFrame();
+                });
+            } catch (err) {
+                console.error('Error accessing camera:', err);
+                updateStatus('Error accessing camera: ' + err.message, 'error');
+            }
+        }
+
+        function stopCamera() {
+            isRunning = false;
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+            video.srcObject = null;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            startButton.disabled = false;
+            stopButton.disabled = true;
+            updateStatus('Camera stopped', 'info');
+            fpsValue.textContent = '0';
+            objectCount.textContent = '0';
+            trackCount.textContent = '0';
+        }
+
+        async function processFrame() {
+            if (!isRunning) return;
+
+            try {
+                // Capture current frame from video
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = video.videoWidth;
+                tempCanvas.height = video.videoHeight;
+                const tempCtx = tempCanvas.getContext('2d');
+                tempCtx.drawImage(video, 0, 0);
+                
+                // Convert to base64
+                const imageData = tempCanvas.toDataURL('image/jpeg', 0.8);
+                
+                // Send to backend for processing
+                const response = await fetch('/process_frame', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ image: imageData })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    // Clear canvas
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    
+                    // Draw bounding boxes
+                    const detections = result.detections;
+                    objectCount.textContent = detections.length;
+                    
+                    const trackedSet = new Set();
+                    
+                    detections.forEach(det => {
+                        const color = getColorForClass(det.class);
+                        
+                        // Draw bounding box
+                        ctx.strokeStyle = color;
+                        ctx.lineWidth = 3;
+                        ctx.strokeRect(det.x1, det.y1, det.x2 - det.x1, det.y2 - det.y1);
+                        
+                        // Draw label background
+                        const label = det.track_id ? 
+                            `ID:${det.track_id} ${det.class} ${(det.confidence * 100).toFixed(1)}%` :
+                            `${det.class} ${(det.confidence * 100).toFixed(1)}%`;
+                        
+                        ctx.font = '16px Arial';
+                        const textWidth = ctx.measureText(label).width;
+                        
+                        ctx.fillStyle = color;
+                        ctx.fillRect(det.x1, det.y1 - 25, textWidth + 10, 25);
+                        
+                        // Draw label text
+                        ctx.fillStyle = 'white';
+                        ctx.fillText(label, det.x1 + 5, det.y1 - 7);
+                        
+                        // Track unique IDs
+                        if (det.track_id) {
+                            trackedSet.add(det.track_id);
+                        }
+                    });
+                    
+                    trackCount.textContent = trackedSet.size;
+                    updateFPS();
+                    updateStatus(`Processing: ${detections.length} objects detected`, 'success');
+                } else {
+                    updateStatus('Error: ' + result.error, 'error');
+                }
+            } catch (err) {
+                console.error('Error processing frame:', err);
+                updateStatus('Error processing frame: ' + err.message, 'error');
+            }
+
+            // Continue processing
+            if (isRunning) {
+                requestAnimationFrame(processFrame);
+            }
+        }
+
+        // Event listeners
+        startButton.addEventListener('click', startCamera);
+        stopButton.addEventListener('click', stopCamera);
+
+        // Check server health on load
+        fetch('/health')
+            .then(response => response.json())
+            .then(data => {
+                console.log('Server health:', data);
+                updateStatus(`Server ready - Model: ${data.model}`, 'success');
+            })
+            .catch(err => {
+                console.error('Server health check failed:', err);
+                updateStatus('Warning: Server not responding', 'error');
+            });
+    </script>
+</body>
+</html>

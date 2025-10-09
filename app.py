@@ -1,6 +1,7 @@
 from flask import Flask, Response, request
 from ultralytics import YOLOE
 import cv2, threading, time, platform, os
+import numpy as np
 from camera_manager import CameraManager
 
 app = Flask(__name__)
@@ -24,6 +25,13 @@ else:
     # Reload with the exported ONNX model
     model = YOLOE(export_model)
     print(f"[INFO] ONNX model exported and cached at {export_model}")
+
+# Warm up the model to initialize ONNX Runtime session
+# This prevents the ~2 minute delay on first inference
+print("[INFO] Warming up model (initializing ONNX Runtime session)...")
+dummy_frame = np.zeros((320, 320, 3), dtype=np.uint8)
+_ = list(model.track(source=dummy_frame, conf=0.3, iou=0.5, show=False, persist=True, verbose=False))
+print("[INFO] Model warm-up complete - ready for inference")
 
 # -------------------------------
 # ⚙️ Shared State

@@ -11,6 +11,14 @@ The application now caches the exported ONNX model for faster startup:
 - **Fast Startup**: Subsequent launches are 10-30x faster by skipping the export step
 - **Automatic Detection**: The app automatically checks for the cached ONNX file
 
+### Model Warm-up
+The application includes intelligent model warm-up to eliminate first inference delays:
+
+- **ONNX Runtime Pre-initialization**: The model is warmed up during startup to initialize the ONNX Runtime session
+- **Instant First Inference**: No ~2 minute delay when user starts inference
+- **Better UX**: Delays happen at startup where they're expected, not during first use
+- **Automatic**: No user intervention required
+
 ### Background Camera Manager
 The application includes a background camera manager that improves camera handling:
 
@@ -64,10 +72,14 @@ python app.py
 **First run:**
 - The app will export the PyTorch model to ONNX format (takes 10-30 seconds)
 - The ONNX file will be cached locally as `yoloe-11s-seg.onnx`
+- The model will be warmed up to initialize ONNX Runtime (~2 minutes)
+- Total first startup: ~2-3 minutes
 
 **Subsequent runs:**
 - The app loads the cached ONNX model directly (takes 1-2 seconds)
-- Much faster startup time!
+- The model is warmed up to initialize ONNX Runtime (~2 minutes)
+- Total startup: ~2 minutes
+- **Note**: The warm-up ensures instant inference when you click "Start"
 
 The camera manager will automatically:
 1. Start in the background when the app launches
@@ -100,8 +112,18 @@ python verify_model_caching.py
 
 This explains how the ONNX model caching works and shows the performance benefit.
 
+## Testing Model Warm-up
+
+Run the model warm-up verification script:
+```bash
+python verify_model_warmup.py
+```
+
+This demonstrates the model warm-up functionality and shows timing breakdown.
+
 ## Documentation
 
+- [MODEL_WARMUP_FIX.md](MODEL_WARMUP_FIX.md) - Explanation of model warm-up fix for first inference delay
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) - Camera detection troubleshooting guide for Windows
 - [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md) - Technical details of the implementation
 - [USAGE_EXAMPLES.md](USAGE_EXAMPLES.md) - Code examples showing how to use the camera manager
@@ -115,7 +137,9 @@ YoloE/
 ├── camera_manager.py             # Background camera manager
 ├── verify_camera_manager.py     # Camera manager verification script
 ├── verify_model_caching.py       # Model caching verification script
+├── verify_model_warmup.py        # Model warm-up verification script
 ├── README.md                     # This file
+├── MODEL_WARMUP_FIX.md           # Model warm-up fix documentation
 ├── IMPLEMENTATION_SUMMARY.md     # Technical documentation
 ├── USAGE_EXAMPLES.md             # Usage examples
 ├── BEFORE_AFTER_COMPARISON.md    # Before/after comparison

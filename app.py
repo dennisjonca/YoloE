@@ -1,6 +1,6 @@
 from flask import Flask, Response, request
 from ultralytics import YOLOE
-import cv2, threading, time, platform
+import cv2, threading, time, platform, os
 from camera_manager import CameraManager
 
 app = Flask(__name__)
@@ -8,12 +8,22 @@ app = Flask(__name__)
 # -------------------------------
 # 🔧 YOLO Model Initialization
 # -------------------------------
-model = YOLOE("yoloe-11s-seg.pt")
-names = ["person", "plant"]
-model.set_classes(names, model.get_text_pe(names))
+# Define the ONNX model path
+onnx_model_path = "yoloe-11s-seg.onnx"
 
-export_model = model.export(format="onnx", imgsz=320)
-model = YOLOE(export_model)
+# Check if ONNX model already exists to avoid re-exporting
+if os.path.exists(onnx_model_path):
+    print(f"[INFO] Loading cached ONNX model from {onnx_model_path}")
+    model = YOLOE(onnx_model_path)
+else:
+    print(f"[INFO] ONNX model not found. Exporting from PyTorch model...")
+    model = YOLOE("yoloe-11s-seg.pt")
+    names = ["person", "plant"]
+    model.set_classes(names, model.get_text_pe(names))
+    export_model = model.export(format="onnx", imgsz=320)
+    # Reload with the exported ONNX model
+    model = YOLOE(export_model)
+    print(f"[INFO] ONNX model exported and cached at {export_model}")
 
 # -------------------------------
 # ⚙️ Shared State

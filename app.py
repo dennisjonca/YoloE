@@ -83,7 +83,7 @@ def inference_thread():
         success, frame = cap.read()
         if not success:
             print(f"[WARN] Camera {current_camera} read() failed, retrying...")
-            time.sleep(0.5)
+            time.sleep(2)
             continue
 
         # Run inference
@@ -182,7 +182,7 @@ def start_inference():
         # Request camera manager to pre-open the camera before starting inference
         if camera_manager:
             camera_manager.request_pre_open(current_camera)
-            time.sleep(0.2)  # Give manager a moment to pre-open
+            time.sleep(2)  # Give manager a moment to pre-open
         t = threading.Thread(target=inference_thread, daemon=True)
         t.start()
     return '<meta http-equiv="refresh" content="0; url=/" />'
@@ -215,7 +215,7 @@ def set_camera():
     # Request camera manager to refresh camera list asynchronously
     if camera_manager:
         camera_manager.request_detect_cameras()
-        time.sleep(0.2)  # Give manager a moment to detect
+        time.sleep(2)  # Give manager a moment to detect
         available_cameras = camera_manager.get_available_cameras()
     else:
         available_cameras = detect_cameras()

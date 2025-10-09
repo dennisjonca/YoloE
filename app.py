@@ -231,9 +231,9 @@ if __name__ == '__main__':
     camera_manager = CameraManager(max_devices=10)
     camera_manager.start()
     
-    # Detect available cameras using the camera manager
+    # Wait for initial camera detection to complete
     print("[INFO] Scanning for available cameras...")
-    time.sleep(0.3)  # Give manager time for initial detection
+    camera_manager.wait_for_initial_detection(timeout=5.0)
     available_cameras = camera_manager.get_available_cameras()
     
     if not available_cameras:

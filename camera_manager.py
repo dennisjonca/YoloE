@@ -29,6 +29,7 @@ class CameraManager:
         self.running = False
         self.manager_thread = None
         self.request_queue = Queue()
+        self.detection_complete = threading.Event()
         
         # Detect platform and set appropriate backend
         self.is_windows = platform.system() == 'Windows'
@@ -50,12 +51,14 @@ class CameraManager:
             if self.manager_thread and self.manager_thread.is_alive():
                 self.manager_thread.join(timeout=2.0)
             self._cleanup_all_cameras()
+            self.detection_complete.clear()
             print("[CameraManager] Background manager stopped")
     
     def _manager_loop(self):
         """Main loop for the background camera manager."""
         # Initial camera detection
         self._detect_cameras()
+        self.detection_complete.set()
         
         while self.running:
             # Process any queued camera requests
@@ -149,6 +152,18 @@ class CameraManager:
         """
         with self.lock:
             return self.available_cameras.copy()
+    
+    def wait_for_initial_detection(self, timeout: float = 5.0) -> bool:
+        """
+        Wait for the initial camera detection to complete.
+        
+        Args:
+            timeout: Maximum time to wait in seconds (default: 5.0)
+            
+        Returns:
+            True if detection completed within timeout, False otherwise
+        """
+        return self.detection_complete.wait(timeout=timeout)
     
     def request_detect_cameras(self):
         """Request async camera detection."""

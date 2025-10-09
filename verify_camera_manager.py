@@ -24,9 +24,13 @@ def verify_camera_manager():
     
     # Wait for initial detection
     print("\n[3] Waiting for initial camera detection...")
-    time.sleep(0.5)
-    available = manager.get_available_cameras()
-    print(f"✓ Found cameras: {available}")
+    if manager.wait_for_initial_detection(timeout=5.0):
+        available = manager.get_available_cameras()
+        print(f"✓ Found cameras: {available}")
+    else:
+        print("⚠️  Initial detection timed out")
+        available = manager.get_available_cameras()
+        print(f"✓ Found cameras: {available}")
     
     if not available:
         print("\n⚠️  No cameras detected. This is expected if no cameras are available.")

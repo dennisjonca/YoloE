@@ -30,12 +30,12 @@ else:
 # -------------------------------
 latest_frame = None
 lock = threading.Lock()
-running = False          # inference running flag
-thread_alive = False     # to track if thread exists
+running = False  # inference running flag
+thread_alive = False  # to track if thread exists
 current_camera = 0
 t = None
 available_cameras = []
-camera_manager = None    # Background camera manager
+camera_manager = None  # Background camera manager
 
 
 # -------------------------------
@@ -47,11 +47,11 @@ def detect_cameras(max_devices: int = 10):
     # but camera detection is now handled by CameraManager
     if camera_manager:
         return camera_manager.get_available_cameras()
-    
+
     # Fallback detection with platform-specific backend
     is_windows = platform.system() == 'Windows'
     backend = cv2.CAP_DSHOW if is_windows else cv2.CAP_ANY
-    
+
     found = []
     for i in range(max_devices):
         cap = cv2.VideoCapture(i, backend)
@@ -70,7 +70,7 @@ def inference_thread():
 
     thread_alive = True
     print(f"[INFO] Starting inference on camera {current_camera}")
-    
+
     # Get camera from manager (pre-opened if available)
     cap = camera_manager.get_camera(current_camera) if camera_manager else cv2.VideoCapture(current_camera)
 
@@ -215,20 +215,20 @@ def set_camera():
     # Request camera manager to refresh camera list asynchronously
     if camera_manager:
         camera_manager.request_detect_cameras()
-        time.sleep(2)  # Give manager a moment to detect
+        time.sleep(0.2)  # Give manager a moment to detect
         available_cameras = camera_manager.get_available_cameras()
     else:
         available_cameras = detect_cameras()
-    
+
     if new_cam not in available_cameras:
         return f"<html><body><h3>Camera {new_cam} not available.</h3><a href='/'>Back</a></body></html>"
 
     current_camera = new_cam
-    
+
     # Request pre-opening of the new camera in background
     if camera_manager:
         camera_manager.request_pre_open(new_cam)
-    
+
     print(f"[INFO] Camera changed to {current_camera}")
     return '<meta http-equiv="refresh" content="0; url=/" />'
 
@@ -240,12 +240,12 @@ if __name__ == '__main__':
     # Initialize camera manager
     camera_manager = CameraManager(max_devices=10)
     camera_manager.start()
-    
+
     # Detect available cameras using the camera manager
     print("[INFO] Scanning for available cameras...")
-    time.sleep(0.3)  # Give manager time for initial detection
+    time.sleep(2)  # Give manager time for initial detection
     available_cameras = camera_manager.get_available_cameras()
-    
+
     if not available_cameras:
         print("[ERROR] No cameras detected!")
         camera_manager.stop()
@@ -253,7 +253,7 @@ if __name__ == '__main__':
 
     print(f"[INFO] Found cameras: {available_cameras}")
     current_camera = available_cameras[0]
-    
+
     # Pre-open the default camera in background
     camera_manager.request_pre_open(current_camera)
 

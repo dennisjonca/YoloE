@@ -21,6 +21,15 @@ The `CameraManager` runs in a separate daemon thread and handles:
 - Camera caching for faster access
 - Proper cleanup of camera resources
 
+## Installation
+
+```bash
+# Install dependencies
+pip install flask opencv-python ultralytics
+
+# Note: You'll also need a YOLO model file (e.g., yoloe-11s-seg.pt)
+```
+
 ## Usage
 
 Run the application:
@@ -34,3 +43,38 @@ The camera manager will automatically:
 3. Pre-open the default camera
 4. Pre-open cameras when you switch to them (before starting inference)
 5. Clean up resources when the app exits
+
+Then open your browser to: `http://127.0.0.1:8080`
+
+## Testing the Camera Manager
+
+Run the verification script to test the camera manager:
+```bash
+python verify_camera_manager.py
+```
+
+This will test:
+- Background thread startup/shutdown
+- Async camera detection
+- Camera pre-opening
+- Request queue processing
+
+## Documentation
+
+- [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md) - Technical details of the implementation
+- [USAGE_EXAMPLES.md](USAGE_EXAMPLES.md) - Code examples showing how to use the camera manager
+- [BEFORE_AFTER_COMPARISON.md](BEFORE_AFTER_COMPARISON.md) - Comparison of old vs new approach
+
+## Project Structure
+
+```
+YoloE/
+├── app.py                        # Main Flask application
+├── camera_manager.py             # Background camera manager
+├── verify_camera_manager.py     # Verification script
+├── README.md                     # This file
+├── IMPLEMENTATION_SUMMARY.md     # Technical documentation
+├── USAGE_EXAMPLES.md             # Usage examples
+├── BEFORE_AFTER_COMPARISON.md    # Before/after comparison
+└── .gitignore                    # Git ignore rules
+```

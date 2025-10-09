@@ -1,0 +1,254 @@
+from flask import Flask, Response, request
+from ultralytics import YOLOE
+import cv2, threading, time, platform
+from camera_manager import CameraManager
+
+app = Flask(__name__)
+
+# -------------------------------
+# 🔧 YOLO Model Initialization
+# -------------------------------
+model = YOLOE("yoloe-11s-seg.pt")
+names = ["person", "plant"]
+model.set_classes(names, model.get_text_pe(names))
+
+export_model = model.export(format="onnx", imgsz=320)
+model = YOLOE(export_model)
+
+# -------------------------------
+# ⚙️ Shared State
+# -------------------------------
+latest_frame = None
+lock = threading.Lock()
+running = False          # inference running flag
+thread_alive = False     # to track if thread exists
+current_camera = 0
+t = None
+available_cameras = []
+camera_manager = None    # Background camera manager
+
+
+# -------------------------------
+# 🔍 Camera Detection Utility (Deprecated - Now handled by CameraManager)
+# -------------------------------
+def detect_cameras(max_devices: int = 10):
+    """Return a list of indices of available camera devices."""
+    # This function is kept for backward compatibility
+    # but camera detection is now handled by CameraManager
+    if camera_manager:
+        return camera_manager.get_available_cameras()
+    
+    # Fallback detection with platform-specific backend
+    is_windows = platform.system() == 'Windows'
+    backend = cv2.CAP_DSHOW if is_windows else cv2.CAP_ANY
+    
+    found = []
+    for i in range(max_devices):
+        cap = cv2.VideoCapture(i, backend)
+        if cap.isOpened():
+            found.append(i)
+            cap.release()
+    return found
+
+
+# -------------------------------
+# 🧠 Inference Thread
+# -------------------------------
+def inference_thread():
+    """Runs YOLO inference in a background thread."""
+    global latest_frame, running, current_camera, thread_alive
+
+    thread_alive = True
+    print(f"[INFO] Starting inference on camera {current_camera}")
+    
+    # Get camera from manager (pre-opened if available)
+    cap = camera_manager.get_camera(current_camera) if camera_manager else cv2.VideoCapture(current_camera)
+
+    if not cap.isOpened():
+        print(f"[ERROR] Could not open camera {current_camera}")
+        thread_alive = False
+        return
+
+    while running:
+        success, frame = cap.read()
+        if not success:
+            print(f"[WARN] Camera {current_camera} read() failed, retrying...")
+            time.sleep(0.5)
+            continue
+
+        # Run inference
+        for result in model.track(source=frame, conf=0.3, iou=0.5, show=False, persist=True):
+            frame = result.orig_img.copy()
+            boxes = result.boxes.xyxy.cpu().numpy().astype(int)
+            names = result.names
+            for box, cls_id in zip(boxes, result.boxes.cls):
+                x1, y1, x2, y2 = box
+                label = names[int(cls_id)]
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(frame, label, (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+            with lock:
+                latest_frame = frame.copy()
+
+        time.sleep(0.001)
+
+    cap.release()
+    thread_alive = False
+    print(f"[INFO] Stopped inference on camera {current_camera}")
+
+
+# -------------------------------
+# 🌐 Web Stream Generator
+# -------------------------------
+def gen_frames():
+    """Continuously yields the latest frame for Flask MJPEG stream."""
+    global latest_frame
+    while True:
+        with lock:
+            if latest_frame is None:
+                continue
+            frame = latest_frame.copy()
+
+        ret, buffer = cv2.imencode('.jpg', frame)
+        if not ret:
+            continue
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+        time.sleep(0.01)
+
+
+# -------------------------------
+# 🖥️ Flask Routes
+# -------------------------------
+@app.route('/')
+def index():
+    """Main HTML page with control buttons."""
+    status = "🟢 Running" if running else "🔴 Stopped"
+
+    options_html = "".join(
+        [f'<option value="{cam}" {"selected" if cam == current_camera else ""}>Camera {cam}</option>'
+         for cam in available_cameras]
+    )
+
+    return f'''
+    <html>
+        <body>
+        <h1>YOLO Live Stream (Threaded, Controlled)</h1>
+        <h3>Status: {status}</h3>
+        <form action="/start" method="post" style="display:inline;">
+            <input type="submit" value="Start Inference" {"disabled" if running else ""}>
+        </form>
+        <form action="/stop" method="post" style="display:inline;">
+            <input type="submit" value="Stop Inference" {"disabled" if not running else ""}>
+        </form>
+        <br><br>
+        <form action="/set_camera" method="post">
+            <label for="camera">Select Camera:</label>
+            <select name="camera" id="camera" {"disabled" if running else ""}>
+                {options_html}
+            </select>
+            <input type="submit" value="Switch Camera" {"disabled" if running else ""}>
+        </form>
+        <br><br>
+        <img src="/video_feed" width="640" height="480">
+        </body>
+    </html>
+    '''
+
+
+@app.route('/video_feed')
+def video_feed():
+    return Response(gen_frames(),
+                    mimetype='multipart/x-mixed-replace; boundary=frame')
+
+
+@app.route('/start', methods=['POST'])
+def start_inference():
+    """Start inference thread."""
+    global running, t
+    if not running:
+        running = True
+        # Request camera manager to pre-open the camera before starting inference
+        if camera_manager:
+            camera_manager.request_pre_open(current_camera)
+            time.sleep(0.2)  # Give manager a moment to pre-open
+        t = threading.Thread(target=inference_thread, daemon=True)
+        t.start()
+    return '<meta http-equiv="refresh" content="0; url=/" />'
+
+
+@app.route('/stop', methods=['POST'])
+def stop_inference():
+    """Stop inference thread."""
+    global running, t
+    if running:
+        running = False
+        if t and t.is_alive():
+            t.join(timeout=2.0)
+    return '<meta http-equiv="refresh" content="0; url=/" />'
+
+
+@app.route('/set_camera', methods=['POST'])
+def set_camera():
+    """Change the active camera device (only allowed when stopped)."""
+    global current_camera, available_cameras
+
+    try:
+        new_cam = int(request.form.get("camera"))
+    except (TypeError, ValueError):
+        return "Invalid camera ID", 400
+
+    if running:
+        return "<html><body><h3>Stop inference first!</h3><a href='/'>Back</a></body></html>"
+
+    # Request camera manager to refresh camera list asynchronously
+    if camera_manager:
+        camera_manager.request_detect_cameras()
+        time.sleep(0.2)  # Give manager a moment to detect
+        available_cameras = camera_manager.get_available_cameras()
+    else:
+        available_cameras = detect_cameras()
+    
+    if new_cam not in available_cameras:
+        return f"<html><body><h3>Camera {new_cam} not available.</h3><a href='/'>Back</a></body></html>"
+
+    current_camera = new_cam
+    
+    # Request pre-opening of the new camera in background
+    if camera_manager:
+        camera_manager.request_pre_open(new_cam)
+    
+    print(f"[INFO] Camera changed to {current_camera}")
+    return '<meta http-equiv="refresh" content="0; url=/" />'
+
+
+# -------------------------------
+# 🏁 Main Entry
+# -------------------------------
+if __name__ == '__main__':
+    # Initialize camera manager
+    camera_manager = CameraManager(max_devices=10)
+    camera_manager.start()
+    
+    # Detect available cameras using the camera manager
+    print("[INFO] Scanning for available cameras...")
+    time.sleep(0.3)  # Give manager time for initial detection
+    available_cameras = camera_manager.get_available_cameras()
+    
+    if not available_cameras:
+        print("[ERROR] No cameras detected!")
+        camera_manager.stop()
+        exit(1)
+
+    print(f"[INFO] Found cameras: {available_cameras}")
+    current_camera = available_cameras[0]
+    
+    # Pre-open the default camera in background
+    camera_manager.request_pre_open(current_camera)
+
+    try:
+        app.run(host='127.0.0.1', port=8080, debug=False, threaded=True)
+    finally:
+        # Cleanup camera manager on exit
+        camera_manager.stop()

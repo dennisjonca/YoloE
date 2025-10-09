@@ -5,6 +5,7 @@ Handles background camera detection, pre-opening, and asynchronous camera manage
 import cv2
 import threading
 import time
+import platform
 from typing import List, Optional, Dict
 from queue import Queue
 
@@ -29,13 +30,18 @@ class CameraManager:
         self.manager_thread = None
         self.request_queue = Queue()
         
+        # Detect platform and set appropriate backend
+        self.is_windows = platform.system() == 'Windows'
+        self.backend = cv2.CAP_DSHOW if self.is_windows else cv2.CAP_ANY
+        
     def start(self):
         """Start the background camera manager thread."""
         if not self.running:
             self.running = True
             self.manager_thread = threading.Thread(target=self._manager_loop, daemon=True)
             self.manager_thread.start()
-            print("[CameraManager] Background manager started")
+            backend_name = "DirectShow" if self.is_windows else "default"
+            print(f"[CameraManager] Background manager started (using {backend_name} backend)")
     
     def stop(self):
         """Stop the background camera manager thread."""
@@ -79,7 +85,7 @@ class CameraManager:
         found = []
         
         for i in range(self.max_devices):
-            cap = cv2.VideoCapture(i)
+            cap = cv2.VideoCapture(i, self.backend)
             if cap.isOpened():
                 found.append(i)
                 cap.release()
@@ -102,7 +108,7 @@ class CameraManager:
                 return
         
         print(f"[CameraManager] Pre-opening camera {camera_id}...")
-        cap = cv2.VideoCapture(camera_id)
+        cap = cv2.VideoCapture(camera_id, self.backend)
         
         if cap.isOpened():
             with self.lock:
@@ -187,7 +193,7 @@ class CameraManager:
         
         # Camera not in cache, open it now
         print(f"[CameraManager] Camera {camera_id} not pre-opened, opening now...")
-        cap = cv2.VideoCapture(camera_id)
+        cap = cv2.VideoCapture(camera_id, self.backend)
         if cap.isOpened():
             return cap
         else:

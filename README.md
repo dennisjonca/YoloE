@@ -9,6 +9,13 @@ The application includes a background camera manager that improves camera handli
 - **Asynchronous Camera Detection**: Cameras are detected in a background thread without blocking the main application.
 - **Pre-opening Cameras**: Cameras can be pre-opened in the background for faster switching and startup.
 - **Queue-based Requests**: All camera operations (detection, pre-opening, releasing) are queued and processed asynchronously.
+- **Platform-Specific Backends**: Automatically uses DirectShow backend on Windows for better camera detection and compatibility.
+
+### Windows Camera Support
+The camera manager automatically detects Windows and uses the DirectShow (CAP_DSHOW) backend, which provides:
+- Better detection of both integrated and external webcams
+- More reliable camera enumeration on Windows 11
+- Improved compatibility with Logitech and other USB webcams
 
 ### Architecture
 
@@ -20,6 +27,7 @@ The `CameraManager` runs in a separate daemon thread and handles:
 - Asynchronous camera pre-opening when requested
 - Camera caching for faster access
 - Proper cleanup of camera resources
+- Platform-specific backend selection (DirectShow on Windows)
 
 ## Installation
 
@@ -29,6 +37,14 @@ pip install flask opencv-python ultralytics
 
 # Note: You'll also need a YOLO model file (e.g., yoloe-11s-seg.pt)
 ```
+
+### Windows Users
+On Windows, the application automatically uses the DirectShow backend for improved camera detection. If you're still having issues detecting cameras:
+
+1. Make sure your camera drivers are up to date
+2. Check that your camera isn't being used by another application
+3. Try running the application as administrator if permission issues occur
+4. Check Windows Privacy settings to ensure camera access is enabled for applications
 
 ## Usage
 
@@ -61,6 +77,7 @@ This will test:
 
 ## Documentation
 
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) - Camera detection troubleshooting guide for Windows
 - [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md) - Technical details of the implementation
 - [USAGE_EXAMPLES.md](USAGE_EXAMPLES.md) - Code examples showing how to use the camera manager
 - [BEFORE_AFTER_COMPARISON.md](BEFORE_AFTER_COMPARISON.md) - Comparison of old vs new approach

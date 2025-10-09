@@ -15,6 +15,7 @@ A dedicated module with the `CameraManager` class that:
 - Pre-opens cameras in the background for faster access
 - Uses a **queue-based request system** for async operations
 - Properly manages camera resources (caching and cleanup)
+- **Platform-specific backend selection**: Automatically uses DirectShow on Windows for better camera detection
 
 **Key features:**
 - `start()` - Starts the background manager thread
@@ -23,6 +24,10 @@ A dedicated module with the `CameraManager` class that:
 - `request_pre_open(camera_id)` - Queue async camera pre-opening
 - `get_camera(camera_id)` - Get a pre-opened camera (or open it if not cached)
 - `get_available_cameras()` - Get list of available cameras
+
+**Platform Support:**
+- **Windows**: Uses `cv2.CAP_DSHOW` (DirectShow) backend for reliable camera detection
+- **Linux/Mac**: Uses `cv2.CAP_ANY` (default) backend
 
 ### 2. Updated: `app.py`
 
@@ -66,6 +71,7 @@ A simple verification script (not a test framework) to manually check that the c
 3. **Better resource management**: Centralized camera lifecycle management
 4. **Scalable**: Easy to add more async camera operations in the future
 5. **Clean separation**: Camera management logic is in its own module
+6. **Windows compatibility**: DirectShow backend ensures reliable detection on Windows 11 with integrated and external webcams
 
 ## How It Works
 

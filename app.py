@@ -1,6 +1,6 @@
 from flask import Flask, Response, request
 from ultralytics import YOLOE
-import cv2, threading, time
+import cv2, threading, time, platform
 from camera_manager import CameraManager
 
 app = Flask(__name__)
@@ -38,9 +38,13 @@ def detect_cameras(max_devices: int = 10):
     if camera_manager:
         return camera_manager.get_available_cameras()
     
+    # Fallback detection with platform-specific backend
+    is_windows = platform.system() == 'Windows'
+    backend = cv2.CAP_DSHOW if is_windows else cv2.CAP_ANY
+    
     found = []
     for i in range(max_devices):
-        cap = cv2.VideoCapture(i)
+        cap = cv2.VideoCapture(i, backend)
         if cap.isOpened():
             found.append(i)
             cap.release()

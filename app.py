@@ -9,29 +9,41 @@ app = Flask(__name__)
 # -------------------------------
 # 🔧 YOLO Model Initialization
 # -------------------------------
-# Define the ONNX model path
-onnx_model_path = "yoloe-11s-seg.onnx"
+# Available model sizes
+available_models = ["s", "m", "l"]
+current_model = "s"  # Default model size
 
-# Check if ONNX model already exists to avoid re-exporting
-if os.path.exists(onnx_model_path):
-    print(f"[INFO] Loading cached ONNX model from {onnx_model_path}")
-    model = YOLOE(onnx_model_path)
-else:
-    print(f"[INFO] ONNX model not found. Exporting from PyTorch model...")
-    model = YOLOE("yoloe-11s-seg.pt")
-    names = ["person", "plant"]
-    model.set_classes(names, model.get_text_pe(names))
-    export_model = model.export(format="onnx", imgsz=320)
-    # Reload with the exported ONNX model
-    model = YOLOE(export_model)
-    print(f"[INFO] ONNX model exported and cached at {export_model}")
+def load_model(model_size):
+    """Load YOLO model with the specified size (s, m, or l)."""
+    # Define the ONNX model path
+    onnx_model_path = f"yoloe-11{model_size}-seg.onnx"
+    pt_model_path = f"yoloe-11{model_size}-seg.pt"
+    
+    # Check if ONNX model already exists to avoid re-exporting
+    if os.path.exists(onnx_model_path):
+        print(f"[INFO] Loading cached ONNX model from {onnx_model_path}")
+        loaded_model = YOLOE(onnx_model_path)
+    else:
+        print(f"[INFO] ONNX model not found. Exporting from PyTorch model...")
+        loaded_model = YOLOE(pt_model_path)
+        names = ["person", "plant"]
+        loaded_model.set_classes(names, loaded_model.get_text_pe(names))
+        export_model = loaded_model.export(format="onnx", imgsz=320)
+        # Reload with the exported ONNX model
+        loaded_model = YOLOE(export_model)
+        print(f"[INFO] ONNX model exported and cached at {export_model}")
+    
+    # Warm up the model to initialize ONNX Runtime session
+    # This prevents the ~2 minute delay on first inference
+    print(f"[INFO] Warming up model {model_size} (initializing ONNX Runtime session)...")
+    dummy_frame = np.zeros((320, 320, 3), dtype=np.uint8)
+    _ = list(loaded_model.track(source=dummy_frame, conf=0.3, iou=0.5, show=False, persist=True, verbose=False))
+    print(f"[INFO] Model {model_size} warm-up complete - ready for inference")
+    
+    return loaded_model
 
-# Warm up the model to initialize ONNX Runtime session
-# This prevents the ~2 minute delay on first inference
-print("[INFO] Warming up model (initializing ONNX Runtime session)...")
-dummy_frame = np.zeros((320, 320, 3), dtype=np.uint8)
-_ = list(model.track(source=dummy_frame, conf=0.3, iou=0.5, show=False, persist=True, verbose=False))
-print("[INFO] Model warm-up complete - ready for inference")
+# Load the default model
+model = load_model(current_model)
 
 # -------------------------------
 # ⚙️ Shared State
@@ -144,9 +156,14 @@ def index():
     """Main HTML page with control buttons."""
     status = "🟢 Running" if running else "🔴 Stopped"
 
-    options_html = "".join(
+    camera_options_html = "".join(
         [f'<option value="{cam}" {"selected" if cam == current_camera else ""}>Camera {cam}</option>'
          for cam in available_cameras]
+    )
+
+    model_options_html = "".join(
+        [f'<option value="{model_size}" {"selected" if model_size == current_model else ""}>YoloE-11{model_size.upper()}</option>'
+         for model_size in available_models]
     )
 
     return f'''
@@ -154,6 +171,7 @@ def index():
         <body>
         <h1>YOLO Live Stream (Threaded, Controlled)</h1>
         <h3>Status: {status}</h3>
+        <h3>Current Model: YoloE-11{current_model.upper()}</h3>
         <form action="/start" method="post" style="display:inline;">
             <input type="submit" value="Start Inference" {"disabled" if running else ""}>
         </form>
@@ -164,9 +182,17 @@ def index():
         <form action="/set_camera" method="post">
             <label for="camera">Select Camera:</label>
             <select name="camera" id="camera" {"disabled" if running else ""}>
-                {options_html}
+                {camera_options_html}
             </select>
             <input type="submit" value="Switch Camera" {"disabled" if running else ""}>
+        </form>
+        <br><br>
+        <form action="/set_model" method="post">
+            <label for="model">Select Model:</label>
+            <select name="model" id="model" {"disabled" if running else ""}>
+                {model_options_html}
+            </select>
+            <input type="submit" value="Switch Model" {"disabled" if running else ""}>
         </form>
         <br><br>
         <img src="/video_feed" width="640" height="480">
@@ -238,6 +264,32 @@ def set_camera():
         camera_manager.request_pre_open(new_cam)
 
     print(f"[INFO] Camera changed to {current_camera}")
+    return '<meta http-equiv="refresh" content="0; url=/" />'
+
+
+@app.route('/set_model', methods=['POST'])
+def set_model():
+    """Change the active YOLO model (only allowed when stopped)."""
+    global current_model, model
+
+    try:
+        new_model = request.form.get("model")
+    except (TypeError, ValueError):
+        return "Invalid model", 400
+
+    if running:
+        return "<html><body><h3>Stop inference first!</h3><a href='/'>Back</a></body></html>"
+
+    if new_model not in available_models:
+        return f"<html><body><h3>Model {new_model} not available.</h3><a href='/'>Back</a></body></html>"
+
+    current_model = new_model
+    
+    # Load the new model
+    print(f"[INFO] Switching to model: YoloE-11{current_model.upper()}")
+    model = load_model(current_model)
+    print(f"[INFO] Model changed to YoloE-11{current_model.upper()}")
+    
     return '<meta http-equiv="refresh" content="0; url=/" />'
 
 

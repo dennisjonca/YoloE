@@ -13,6 +13,9 @@ app = Flask(__name__)
 available_models = ["s", "m", "l"]
 current_model = "s"  # Default model size
 
+# Class prompts for YOLO model
+current_classes = ["person", "plant"]  # Default class prompts
+
 def load_model(model_size):
     """Load YOLO model with the specified size (s, m, or l)."""
     # Define the ONNX model path
@@ -26,8 +29,7 @@ def load_model(model_size):
     else:
         print(f"[INFO] ONNX model not found. Exporting from PyTorch model...")
         loaded_model = YOLOE(pt_model_path)
-        names = ["person", "plant"]
-        loaded_model.set_classes(names, loaded_model.get_text_pe(names))
+        loaded_model.set_classes(current_classes, loaded_model.get_text_pe(current_classes))
         export_model = loaded_model.export(format="onnx", imgsz=320)
         # Reload with the exported ONNX model
         loaded_model = YOLOE(export_model)
@@ -155,6 +157,9 @@ def gen_frames():
 def index():
     """Main HTML page with control buttons."""
     status = "🟢 Running" if running else "🔴 Stopped"
+    
+    # Format current classes as comma-separated string for display
+    classes_str = ", ".join(current_classes)
 
     camera_options_html = "".join(
         [f'<option value="{cam}" {"selected" if cam == current_camera else ""}>Camera {cam}</option>'
@@ -172,6 +177,7 @@ def index():
         <h1>YOLO Live Stream (Threaded, Controlled)</h1>
         <h3>Status: {status}</h3>
         <h3>Current Model: YoloE-11{current_model.upper()}</h3>
+        <h3>Current Classes: {classes_str}</h3>
         <form action="/start" method="post" style="display:inline;">
             <input type="submit" value="Start Inference" {"disabled" if running else ""}>
         </form>
@@ -193,6 +199,12 @@ def index():
                 {model_options_html}
             </select>
             <input type="submit" value="Switch Model" {"disabled" if running else ""}>
+        </form>
+        <br><br>
+        <form action="/set_classes" method="post">
+            <label for="classes">Class Prompts (comma-separated):</label><br>
+            <input type="text" name="classes" id="classes" value="{classes_str}" size="50" {"disabled" if running else ""}>
+            <input type="submit" value="Update Classes" {"disabled" if running else ""}>
         </form>
         <br><br>
         <img src="/video_feed" width="640" height="480">
@@ -289,6 +301,44 @@ def set_model():
     print(f"[INFO] Switching to model: YoloE-11{current_model.upper()}")
     model = load_model(current_model)
     print(f"[INFO] Model changed to YoloE-11{current_model.upper()}")
+    
+    return '<meta http-equiv="refresh" content="0; url=/" />'
+
+
+@app.route('/set_classes', methods=['POST'])
+def set_classes():
+    """Change the class prompts (only allowed when stopped)."""
+    global current_classes, model
+
+    try:
+        classes_input = request.form.get("classes", "").strip()
+    except (TypeError, ValueError):
+        return "Invalid classes input", 400
+
+    if running:
+        return "<html><body><h3>Stop inference first!</h3><a href='/'>Back</a></body></html>"
+
+    if not classes_input:
+        return "<html><body><h3>Classes cannot be empty!</h3><a href='/'>Back</a></body></html>"
+
+    # Parse comma-separated classes and strip whitespace
+    new_classes = [cls.strip() for cls in classes_input.split(",") if cls.strip()]
+    
+    if not new_classes:
+        return "<html><body><h3>Please provide at least one class!</h3><a href='/'>Back</a></body></html>"
+
+    current_classes = new_classes
+    
+    # Delete the cached ONNX model to force re-export with new classes
+    onnx_model_path = f"yoloe-11{current_model}-seg.onnx"
+    if os.path.exists(onnx_model_path):
+        os.remove(onnx_model_path)
+        print(f"[INFO] Removed cached ONNX model: {onnx_model_path}")
+    
+    # Reload the model with new classes
+    print(f"[INFO] Updating classes to: {current_classes}")
+    model = load_model(current_model)
+    print(f"[INFO] Classes updated successfully")
     
     return '<meta http-equiv="refresh" content="0; url=/" />'
 

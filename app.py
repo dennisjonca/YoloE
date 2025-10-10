@@ -37,7 +37,7 @@ def load_model(model_size):
     # This prevents the ~2 minute delay on first inference
     print(f"[INFO] Warming up model {model_size} (initializing ONNX Runtime session)...")
     dummy_frame = np.zeros((320, 320, 3), dtype=np.uint8)
-    _ = list(loaded_model.track(source=dummy_frame, conf=0.3, iou=0.5, show=False, persist=True, verbose=False))
+    _ = list(loaded_model.track(source=dummy_frame, conf=0.2, iou=0.4, show=False, persist=True, verbose=False))
     print(f"[INFO] Model {model_size} warm-up complete - ready for inference")
     
     return loaded_model
@@ -116,7 +116,7 @@ def inference_thread():
             continue
 
         # Run inference
-        for result in model.track(source=frame, conf=0.3, iou=0.5, show=False, persist=True):
+        for result in model.track(source=frame, conf=0.2, iou=0.4, show=False, persist=True):
             frame = result.orig_img.copy()
             boxes = result.boxes.xyxy.cpu().numpy().astype(int)
             names = result.names

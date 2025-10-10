@@ -94,7 +94,7 @@ def inference_thread():
     # Get camera from manager (pre-opened if available)
     cap = camera_manager.get_camera(current_camera) if camera_manager else cv2.VideoCapture(current_camera)
 
-    if not cap.isOpened():
+    if cap is None or not cap.isOpened():
         print(f"[ERROR] Could not open camera {current_camera}")
         thread_alive = False
         return
@@ -123,7 +123,8 @@ def inference_thread():
 
         time.sleep(0.001)
 
-    cap.release()
+    if cap is not None:
+        cap.release()
     thread_alive = False
     print(f"[INFO] Stopped inference on camera {current_camera}")
 

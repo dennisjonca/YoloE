@@ -313,7 +313,7 @@ if __name__ == '__main__':
 
     # Detect available cameras using the camera manager
     print("[INFO] Scanning for available cameras...")
-    time.sleep(2)  # Give manager time for initial detection
+    time.sleep(5)  # Give manager time for initial detection
     available_cameras = camera_manager.get_available_cameras()
 
     if not available_cameras:

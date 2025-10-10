@@ -27,6 +27,14 @@ The application includes a background camera manager that improves camera handli
 - **Queue-based Requests**: All camera operations (detection, pre-opening, releasing) are queued and processed asynchronously.
 - **Platform-Specific Backends**: Automatically uses DirectShow backend on Windows for better camera detection and compatibility.
 
+### Tracker Reset on Camera Switch
+The application automatically resets the YOLO tracker when switching cameras:
+
+- **Clean Tracking State**: Each camera session starts with a fresh tracker state
+- **No Warning Messages**: Eliminates the "WARNING not enough matching points" message
+- **Proper Bounding Boxes**: Ensures bounding boxes appear correctly after switching cameras
+- **Automatic**: No user intervention required
+
 ### Windows Camera Support
 The camera manager automatically detects Windows and uses the DirectShow (CAP_DSHOW) backend, which provides:
 - Better detection of both integrated and external webcams
@@ -121,8 +129,18 @@ python verify_model_warmup.py
 
 This demonstrates the model warm-up functionality and shows timing breakdown.
 
+## Testing Tracker Reset
+
+Run the tracker reset test suite:
+```bash
+python test_tracker_reset.py
+```
+
+This verifies that the tracker reset functionality is properly implemented to prevent tracking issues when switching cameras.
+
 ## Documentation
 
+- [TRACKER_RESET_FIX.md](TRACKER_RESET_FIX.md) - Explanation of tracker reset fix for camera switching
 - [MODEL_WARMUP_FIX.md](MODEL_WARMUP_FIX.md) - Explanation of model warm-up fix for first inference delay
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) - Camera detection troubleshooting guide for Windows
 - [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md) - Technical details of the implementation
@@ -135,10 +153,12 @@ This demonstrates the model warm-up functionality and shows timing breakdown.
 YoloE/
 ├── app.py                        # Main Flask application
 ├── camera_manager.py             # Background camera manager
-├── verify_camera_manager.py     # Camera manager verification script
+├── test_tracker_reset.py         # Tracker reset test suite
+├── verify_camera_manager.py      # Camera manager verification script
 ├── verify_model_caching.py       # Model caching verification script
 ├── verify_model_warmup.py        # Model warm-up verification script
 ├── README.md                     # This file
+├── TRACKER_RESET_FIX.md          # Tracker reset fix documentation
 ├── MODEL_WARMUP_FIX.md           # Model warm-up fix documentation
 ├── IMPLEMENTATION_SUMMARY.md     # Technical documentation
 ├── USAGE_EXAMPLES.md             # Usage examples

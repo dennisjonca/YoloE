@@ -91,6 +91,15 @@ def inference_thread():
     thread_alive = True
     print(f"[INFO] Starting inference on camera {current_camera}")
 
+    # Reset tracker state to avoid tracking issues when switching cameras
+    try:
+        if hasattr(model, 'predictor') and model.predictor is not None:
+            if hasattr(model.predictor, 'trackers') and model.predictor.trackers:
+                model.predictor.trackers[0].reset()
+                print(f"[INFO] Tracker reset for camera {current_camera}")
+    except Exception as e:
+        print(f"[WARN] Could not reset tracker: {e}")
+
     # Get camera from manager (pre-opened if available)
     cap = camera_manager.get_camera(current_camera) if camera_manager else cv2.VideoCapture(current_camera)
 

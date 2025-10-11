@@ -116,7 +116,7 @@ def inference_thread():
             continue
 
         # Run inference
-        for result in model.track(source=frame, conf=0.2, iou=0.4, show=False, persist=True):
+        for result in model.track(source=frame, conf=0.1, iou=0.5, show=False, persist=True):
             frame = result.orig_img.copy()
             boxes = result.boxes.xyxy.cpu().numpy().astype(int)
             names = result.names
@@ -124,7 +124,7 @@ def inference_thread():
                 x1, y1, x2, y2 = box
                 label = names[int(cls_id)]
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(frame, label, (x1, y1 - 10),
+                cv2.putText(frame, label, (x1, y1 + 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
             with lock:

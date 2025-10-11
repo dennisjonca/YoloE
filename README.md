@@ -3,6 +3,15 @@ A YoloE project to demonstrate using AI in process.
 
 ## Features
 
+### Custom Class Prompts
+The application allows users to customize which objects the YOLO model should detect:
+
+- **Flexible Detection**: Enter any comma-separated list of object classes (e.g., "banana, apple, orange")
+- **Web Interface**: Simple text input field in the web UI
+- **Real-time Updates**: Classes can be changed at any time when inference is stopped
+- **No Code Changes**: Users don't need to modify code to detect different objects
+- **Default Classes**: Ships with "person, plant" as default, but fully customizable
+
 ### ONNX Model Caching
 The application now caches the exported ONNX model for faster startup:
 
@@ -98,6 +107,28 @@ The camera manager will automatically:
 
 Then open your browser to: `http://127.0.0.1:8080`
 
+## Using Custom Classes
+
+To detect custom objects:
+1. Stop inference if it's running
+2. Enter your desired object classes in the "Custom Classes" field (comma-separated)
+   - Example: `banana, apple, orange` for fruit detection
+   - Example: `car, truck, bus` for vehicle detection
+   - Example: `cat, dog, bird` for animal detection
+3. Click "Update Classes" to reload the model
+4. Start inference to detect your custom objects
+
+The model will be reloaded with the new classes (takes a few seconds with cached models).
+
+## Testing Custom Classes
+
+Run the custom classes test suite:
+```bash
+python test_custom_classes.py
+```
+
+This verifies that the custom classes functionality is properly implemented.
+
 ## Testing the Camera Manager
 
 Run the verification script to test the camera manager:
@@ -140,6 +171,7 @@ This verifies that the tracker reset functionality is properly implemented to pr
 
 ## Documentation
 
+- [CUSTOM_CLASSES_FEATURE.md](CUSTOM_CLASSES_FEATURE.md) - Custom class prompts feature documentation
 - [TRACKER_RESET_FIX.md](TRACKER_RESET_FIX.md) - Explanation of tracker reset fix for camera switching
 - [MODEL_WARMUP_FIX.md](MODEL_WARMUP_FIX.md) - Explanation of model warm-up fix for first inference delay
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) - Camera detection troubleshooting guide for Windows
@@ -153,11 +185,13 @@ This verifies that the tracker reset functionality is properly implemented to pr
 YoloE/
 ├── app.py                        # Main Flask application
 ├── camera_manager.py             # Background camera manager
+├── test_custom_classes.py        # Custom classes test suite
 ├── test_tracker_reset.py         # Tracker reset test suite
 ├── verify_camera_manager.py      # Camera manager verification script
 ├── verify_model_caching.py       # Model caching verification script
 ├── verify_model_warmup.py        # Model warm-up verification script
 ├── README.md                     # This file
+├── CUSTOM_CLASSES_FEATURE.md     # Custom classes feature documentation
 ├── TRACKER_RESET_FIX.md          # Tracker reset fix documentation
 ├── MODEL_WARMUP_FIX.md           # Model warm-up fix documentation
 ├── IMPLEMENTATION_SUMMARY.md     # Technical documentation

@@ -27,19 +27,17 @@ def load_model(model_size, class_names=None):
     if os.path.exists(onnx_model_path):
         print(f"[INFO] Loading cached ONNX model from {onnx_model_path}")
         loaded_model = YOLOE(onnx_model_path)
+        # ONNX models have classes baked in during export, no need to set them again
+        print(f"[INFO] Using cached model with classes: {class_names}")
     else:
         print(f"[INFO] ONNX model not found. Exporting from PyTorch model...")
         loaded_model = YOLOE(pt_model_path)
-        names = class_names
-        loaded_model.set_classes(names, loaded_model.get_text_pe(names))
+        loaded_model.set_classes(class_names, loaded_model.get_text_pe(class_names))
         export_model = loaded_model.export(format="onnx", imgsz=320)
         # Reload with the exported ONNX model
         loaded_model = YOLOE(export_model)
         print(f"[INFO] ONNX model exported and cached at {export_model}")
-    
-    # Set classes on the loaded model (whether cached or freshly exported)
-    loaded_model.set_classes(class_names, loaded_model.get_text_pe(class_names))
-    print(f"[INFO] Model classes set to: {class_names}")
+        print(f"[INFO] Model classes set to: {class_names}")
     
     # Warm up the model to initialize ONNX Runtime session
     # This prevents the ~2 minute delay on first inference
@@ -341,6 +339,12 @@ def set_classes():
     
     if not class_list:
         return "<html><body><h3>Please provide at least one class name.</h3><a href='/'>Back</a></body></html>"
+    
+    # Delete cached ONNX model to force re-export with new classes
+    onnx_model_path = f"yoloe-11{current_model}-seg.onnx"
+    if os.path.exists(onnx_model_path):
+        os.remove(onnx_model_path)
+        print(f"[INFO] Removed cached ONNX model to re-export with new classes")
     
     # Reload the model with new classes
     print(f"[INFO] Updating classes to: {class_list}")

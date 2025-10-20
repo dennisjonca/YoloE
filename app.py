@@ -85,10 +85,12 @@ def load_model(model_size, class_names=None, visual_prompt_data=None):
                 
                 # Convert numpy arrays to PyTorch tensors
                 # Image: Convert from HWC (Height, Width, Channels) to CHW (Channels, Height, Width)
-                image_tensor = torch.from_numpy(resized_image).permute(2, 0, 1).unsqueeze(0).float()
+                # Also normalize pixel values from [0, 255] to [0, 1]
+                image_tensor = torch.from_numpy(resized_image).permute(2, 0, 1).unsqueeze(0).float() / 255.0
                 
-                # DEBUG: Print image tensor shape
+                # DEBUG: Print image tensor shape and value range
                 print(f"[DEBUG] Image tensor shape: {image_tensor.shape}")
+                print(f"[DEBUG] Image tensor value range: [{image_tensor.min():.3f}, {image_tensor.max():.3f}]")
                 
                 # Normalize boxes to [0, 1] range relative to ORIGINAL image dimensions
                 boxes = visual_prompt_data['boxes'].astype(np.float32)
@@ -113,25 +115,46 @@ def load_model(model_size, class_names=None, visual_prompt_data=None):
                 print(f"[DEBUG] Boxes in cxcywh format: {cxcywh_boxes}")
                 
                 # Boxes: Convert to tensor with batch dimension (B, N, D) where B=1, N=num_boxes, D=4
-                # Try cxcywh format first
+                # Make sure we maintain the (B, N, 4) shape
                 boxes_tensor = torch.from_numpy(cxcywh_boxes).unsqueeze(0).float()
+                
+                # ALTERNATIVE: Try xyxy format if cxcywh doesn't work
+                # boxes_tensor = torch.from_numpy(normalized_boxes).unsqueeze(0).float()
                 
                 # DEBUG: Print box tensor shape
                 print(f"[DEBUG] Box tensor shape: {boxes_tensor.shape}")
+                print(f"[DEBUG] Box tensor ndim: {boxes_tensor.ndim}")
                 print(f"[DEBUG] Box tensor dtype: {boxes_tensor.dtype}")
-                print(f"[DEBUG] Box tensor values: {boxes_tensor}")
+                print(f"[DEBUG] Box tensor values:\n{boxes_tensor}")
                 
                 # Try using set_prompts if available
                 if hasattr(loaded_model, 'set_prompts'):
                     print(f"[DEBUG] Using set_prompts method")
-                    loaded_model.set_prompts(image_tensor, boxes_tensor)
+                    try:
+                        loaded_model.set_prompts(image_tensor, boxes_tensor)
+                        print(f"[DEBUG] set_prompts succeeded")
+                    except Exception as e:
+                        print(f"[DEBUG] set_prompts failed: {e}")
+                        # Try with xyxy format instead
+                        boxes_tensor_xyxy = torch.from_numpy(normalized_boxes).unsqueeze(0).float()
+                        print(f"[DEBUG] Trying set_prompts with xyxy format, shape: {boxes_tensor_xyxy.shape}")
+                        loaded_model.set_prompts(image_tensor, boxes_tensor_xyxy)
                 # Fallback: use get_visual_pe to get visual prompt embeddings
                 elif hasattr(loaded_model, 'get_visual_pe'):
                     print(f"[DEBUG] Using get_visual_pe method")
                     print(f"[DEBUG] Calling get_visual_pe with image_tensor shape: {image_tensor.shape}, boxes_tensor shape: {boxes_tensor.shape}")
-                    visual_pe = loaded_model.get_visual_pe(image_tensor, boxes_tensor)
-                    print(f"[DEBUG] Visual PE shape: {visual_pe.shape if hasattr(visual_pe, 'shape') else 'N/A'}")
-                    loaded_model.set_classes(["object"], visual_pe)
+                    try:
+                        visual_pe = loaded_model.get_visual_pe(image_tensor, boxes_tensor)
+                        print(f"[DEBUG] get_visual_pe succeeded, visual_pe shape: {visual_pe.shape if hasattr(visual_pe, 'shape') else 'N/A'}")
+                        loaded_model.set_classes(["object"], visual_pe)
+                    except Exception as e:
+                        print(f"[DEBUG] get_visual_pe with cxcywh failed: {e}")
+                        # Try with xyxy format instead
+                        boxes_tensor_xyxy = torch.from_numpy(normalized_boxes).unsqueeze(0).float()
+                        print(f"[DEBUG] Trying get_visual_pe with xyxy format, shape: {boxes_tensor_xyxy.shape}")
+                        visual_pe = loaded_model.get_visual_pe(image_tensor, boxes_tensor_xyxy)
+                        print(f"[DEBUG] get_visual_pe with xyxy succeeded, visual_pe shape: {visual_pe.shape if hasattr(visual_pe, 'shape') else 'N/A'}")
+                        loaded_model.set_classes(["object"], visual_pe)
                 else:
                     print(f"[WARN] Visual prompting not directly supported, using fallback")
                     # Fallback: use generic class name

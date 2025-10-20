@@ -37,7 +37,24 @@ def load_model(model_size, class_names=None, visual_prompt_data=None):
         if visual_prompt_data is not None:
             # Visual prompting mode: use image and bounding boxes
             print(f"[INFO] Setting up visual prompts with {len(visual_prompt_data['boxes'])} boxes")
-            loaded_model.set_prompts(visual_prompt_data['image'], visual_prompt_data['boxes'])
+            # YOLOE visual prompting: extract features from reference image and boxes
+            # The model will learn to track objects similar to those in the boxes
+            try:
+                # Try using set_prompts if available
+                if hasattr(loaded_model, 'set_prompts'):
+                    loaded_model.set_prompts(visual_prompt_data['image'], visual_prompt_data['boxes'])
+                # Fallback: use get_visual_pe to get visual prompt embeddings
+                elif hasattr(loaded_model, 'get_visual_pe'):
+                    visual_pe = loaded_model.get_visual_pe(visual_prompt_data['image'], visual_prompt_data['boxes'])
+                    loaded_model.set_classes(["object"], visual_pe)
+                else:
+                    print(f"[WARN] Visual prompting not directly supported, using fallback")
+                    # Fallback: use generic class name
+                    loaded_model.set_classes(["object"], loaded_model.get_text_pe(["object"]))
+            except Exception as e:
+                print(f"[ERROR] Failed to set visual prompts: {e}")
+                print(f"[INFO] Falling back to generic object detection")
+                loaded_model.set_classes(["object"], loaded_model.get_text_pe(["object"]))
         else:
             # Text prompting mode: use class names
             loaded_model.set_classes(class_names, loaded_model.get_text_pe(class_names))

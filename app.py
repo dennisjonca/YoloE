@@ -72,16 +72,22 @@ def load_model(model_size, class_names=None, visual_prompt_data=None):
             # YOLOE visual prompting: extract features from reference image and boxes
             # The model will learn to track objects similar to those in the boxes
             try:
+                # Resize image to model's expected input size (320x320)
+                # This is critical because the model's feature extractor expects this size
+                original_image = visual_prompt_data['image']
+                orig_h, orig_w = original_image.shape[:2]
+                model_size = 320  # Match the export size (imgsz=320)
+                resized_image = cv2.resize(original_image, (model_size, model_size))
+                
                 # Convert numpy arrays to PyTorch tensors
                 # Image: Convert from HWC (Height, Width, Channels) to CHW (Channels, Height, Width)
-                image_tensor = torch.from_numpy(visual_prompt_data['image']).permute(2, 0, 1).unsqueeze(0).float()
+                image_tensor = torch.from_numpy(resized_image).permute(2, 0, 1).unsqueeze(0).float()
                 
-                # Normalize boxes to [0, 1] range relative to image dimensions
-                h, w = visual_prompt_data['image'].shape[:2]
+                # Normalize boxes to [0, 1] range relative to ORIGINAL image dimensions
                 boxes = visual_prompt_data['boxes'].astype(np.float32)
                 normalized_boxes = np.copy(boxes)
-                normalized_boxes[:, [0, 2]] /= w  # Normalize x coordinates
-                normalized_boxes[:, [1, 3]] /= h  # Normalize y coordinates
+                normalized_boxes[:, [0, 2]] /= orig_w  # Normalize x coordinates
+                normalized_boxes[:, [1, 3]] /= orig_h  # Normalize y coordinates
                 
                 # Boxes: Convert to tensor with batch dimension (B, N, D) where B=1, N=num_boxes, D=4
                 boxes_tensor = torch.from_numpy(normalized_boxes).unsqueeze(0).float()

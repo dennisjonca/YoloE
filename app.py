@@ -398,6 +398,8 @@ def index():
                 #snapshotCanvas {{
                     border: 2px solid #333;
                     cursor: crosshair;
+                    max-width: 100%;
+                    height: auto;
                 }}
                 .button {{
                     padding: 8px 16px;
@@ -538,8 +540,11 @@ def index():
                 if ({str(running).lower()} || !snapshotLoaded) return;
                 
                 const rect = canvas.getBoundingClientRect();
-                startX = e.clientX - rect.left;
-                startY = e.clientY - rect.top;
+                // Scale mouse coordinates to canvas logical coordinates
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                startX = (e.clientX - rect.left) * scaleX;
+                startY = (e.clientY - rect.top) * scaleY;
                 isDrawing = true;
             }});
             
@@ -547,8 +552,11 @@ def index():
                 if (!isDrawing) return;
                 
                 const rect = canvas.getBoundingClientRect();
-                const currentX = e.clientX - rect.left;
-                const currentY = e.clientY - rect.top;
+                // Scale mouse coordinates to canvas logical coordinates
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                const currentX = (e.clientX - rect.left) * scaleX;
+                const currentY = (e.clientY - rect.top) * scaleY;
                 
                 // Redraw everything
                 loadSnapshot();
@@ -563,8 +571,11 @@ def index():
                 if (!isDrawing) return;
                 
                 const rect = canvas.getBoundingClientRect();
-                const endX = e.clientX - rect.left;
-                const endY = e.clientY - rect.top;
+                // Scale mouse coordinates to canvas logical coordinates
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                const endX = (e.clientX - rect.left) * scaleX;
+                const endY = (e.clientY - rect.top) * scaleY;
                 
                 // Save the box (normalize to 0-1 range)
                 const x1 = Math.min(startX, endX) / canvas.width;

@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>YoloE Visual Prompting - UI Mockup</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .section {
+            border: 1px solid #ccc;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+            background-color: white;
+        }
+        .canvas-container {
+            position: relative;
+            display: inline-block;
+        }
+        #snapshotCanvas {
+            border: 2px solid #333;
+            cursor: crosshair;
+            background-color: #eee;
+        }
+        .button {
+            padding: 8px 16px;
+            margin: 5px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .button:hover {
+            background-color: #45a049;
+        }
+        .button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            background-color: #ccc;
+        }
+        .status {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .status.stopped {
+            background-color: #ffebee;
+            color: #c62828;
+        }
+        .status.running {
+            background-color: #e8f5e9;
+            color: #2e7d32;
+        }
+        .status.visual {
+            background-color: #e3f2fd;
+            color: #1565c0;
+        }
+        input[type="text"] {
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        select {
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        h1 {
+            color: #333;
+        }
+        h2 {
+            color: #555;
+            margin-top: 0;
+        }
+        h3 {
+            color: #666;
+            margin: 5px 0;
+        }
+        .video-feed {
+            border: 2px solid #333;
+            background-color: #000;
+            width: 640px;
+            height: 480px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 24px;
+        }
+        .box-info {
+            margin-top: 10px;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎯 YOLO Live Stream with Visual Prompting</h1>
+    
+    <div class="section">
+        <h2>Status & Controls</h2>
+        <h3>Status: <span class="status stopped">🔴 Stopped</span></h3>
+        <h3>Current Model: YoloE-11S</h3>
+        <h3>Prompt Mode: <span class="status visual">🎯 Visual Prompting</span></h3>
+        <h3>Visual Prompts Active: 2 boxes</h3>
+        
+        <button class="button">Start Inference</button>
+        <button class="button" disabled>Stop Inference</button>
+    </div>
+    
+    <div class="section">
+        <h2>Configuration</h2>
+        <form>
+            <label for="camera">Select Camera:</label>
+            <select name="camera" id="camera">
+                <option value="0" selected>Camera 0</option>
+                <option value="1">Camera 1</option>
+            </select>
+            <button type="submit" class="button">Switch Camera</button>
+        </form>
+        <br><br>
+        <form>
+            <label for="model">Select Model:</label>
+            <select name="model" id="model">
+                <option value="s" selected>YoloE-11S</option>
+                <option value="m">YoloE-11M</option>
+                <option value="l">YoloE-11L</option>
+            </select>
+            <button type="submit" class="button">Switch Model</button>
+        </form>
+    </div>
+    
+    <div class="section">
+        <h2>📝 Text Prompting</h2>
+        <form>
+            <label for="classes">Custom Classes (comma-separated):</label>
+            <input type="text" name="classes" id="classes" value="person, plant" size="50">
+            <button type="submit" class="button">Update Classes</button>
+        </form>
+    </div>
+    
+    <div class="section">
+        <h2>🎯 Visual Prompting</h2>
+        <p>Capture a snapshot from the camera and draw bounding boxes around objects you want to track.</p>
+        
+        <button class="button">Capture Snapshot</button>
+        <button class="button">Clear Boxes</button>
+        <button class="button">Save Snapshot with Boxes</button>
+        <button class="button">Clear Visual Prompt</button>
+        
+        <br><br>
+        
+        <div class="canvas-container">
+            <canvas id="snapshotCanvas" width="640" height="480"></canvas>
+        </div>
+        
+        <p class="box-info" id="boxInfo">✓ 2 box(es) drawn - Ready to save!</p>
+        
+        <script>
+            const canvas = document.getElementById('snapshotCanvas');
+            const ctx = canvas.getContext('2d');
+            
+            // Draw a mock snapshot with boxes
+            ctx.fillStyle = '#ddd';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Add some text to simulate a captured frame
+            ctx.fillStyle = '#666';
+            ctx.font = '20px Arial';
+            ctx.fillText('📸 Captured Snapshot', 220, 240);
+            
+            // Draw two example bounding boxes
+            ctx.strokeStyle = 'lime';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(150, 150, 150, 120);
+            ctx.strokeRect(380, 200, 180, 150);
+            
+            // Add labels
+            ctx.fillStyle = 'lime';
+            ctx.font = '14px Arial';
+            ctx.fillText('Box 1', 155, 145);
+            ctx.fillText('Box 2', 385, 195);
+        </script>
+    </div>
+    
+    <div class="section">
+        <h2>📹 Live Feed</h2>
+        <div class="video-feed">
+            🎥 Live Camera Feed with Detections
+        </div>
+    </div>
+    
+    <div style="margin-top: 30px; padding: 15px; background-color: #e3f2fd; border-radius: 5px;">
+        <h3>How to Use Visual Prompting:</h3>
+        <ol>
+            <li>Stop inference if it's running</li>
+            <li>Click "Capture Snapshot" to capture the current frame</li>
+            <li>Click and drag on the snapshot to draw bounding boxes around objects</li>
+            <li>Click "Save Snapshot with Boxes" to configure the model</li>
+            <li>Wait for model to re-export and warm up (~2 minutes)</li>
+            <li>Click "Start Inference" to track similar objects</li>
+        </ol>
+    </div>
+</body>
+</html>

@@ -42,8 +42,11 @@ def get_hardware_info():
 def load_model(model_size, class_names=None, visual_prompt_data=None):
     """Load YOLO model with the specified size (s, m, or l) and class names or visual prompts.
     
+    For visual prompting, the model is NOT pre-configured. Instead, visual_prompt_data is stored
+    and passed to predict() during inference.
+    
     Returns:
-        tuple: (model, success) where success is True if visual prompts were set successfully,
+        tuple: (model, success) where success is True if visual prompts were validated successfully,
                or True if text prompts were used (no visual prompts requested)
     """
     if class_names is None:
@@ -53,130 +56,66 @@ def load_model(model_size, class_names=None, visual_prompt_data=None):
     onnx_model_path = f"yoloe-11{model_size}-seg.onnx"
     pt_model_path = f"yoloe-11{model_size}-seg.pt"
     
-    visual_prompt_success = True  # Track if visual prompts were set successfully
+    visual_prompt_success = True  # Track if visual prompts were validated successfully
     
-    # Check if ONNX model already exists to avoid re-exporting
-    if os.path.exists(onnx_model_path):
-        print(f"[INFO] Loading cached ONNX model from {onnx_model_path}")
-        loaded_model = YOLOE(onnx_model_path)
-        # ONNX models have classes baked in during export, no need to set them again
-        print(f"[INFO] Using cached model with classes: {class_names}")
-    else:
-        print(f"[INFO] ONNX model not found. Exporting from PyTorch model...")
+    # For visual prompting, we need to use PyTorch model, not ONNX
+    # because visual prompts are passed per-frame to predict()
+    if visual_prompt_data is not None:
+        print(f"[INFO] Loading PyTorch model for visual prompting...")
         loaded_model = YOLOE(pt_model_path)
         
-        # Set up prompts based on mode
-        if visual_prompt_data is not None:
-            # Visual prompting mode: use image and bounding boxes
-            print(f"[INFO] Setting up visual prompts with {len(visual_prompt_data['boxes'])} boxes")
-            # YOLOE visual prompting: extract features from reference image and boxes
-            # The model will learn to track objects similar to those in the boxes
-            try:
-                # Resize image to model's expected input size (320x320)
-                # This is critical because the model's feature extractor expects this size
-                original_image = visual_prompt_data['image']
-                orig_h, orig_w = original_image.shape[:2]
-                model_size = 320  # Match the export size (imgsz=320)
-                resized_image = cv2.resize(original_image, (model_size, model_size))
-                
-                # DEBUG: Print original image info
-                print(f"[DEBUG] Original image shape: {original_image.shape} (H={orig_h}, W={orig_w})")
-                print(f"[DEBUG] Resized image shape: {resized_image.shape}")
-                
-                # Convert numpy arrays to PyTorch tensors
-                # Image: Convert from HWC (Height, Width, Channels) to CHW (Channels, Height, Width)
-                # Also normalize pixel values from [0, 255] to [0, 1]
-                image_tensor = torch.from_numpy(resized_image).permute(2, 0, 1).unsqueeze(0).float() / 255.0
-                
-                # DEBUG: Print image tensor shape and value range
-                print(f"[DEBUG] Image tensor shape: {image_tensor.shape}")
-                print(f"[DEBUG] Image tensor value range: [{image_tensor.min():.3f}, {image_tensor.max():.3f}]")
-                
-                # Normalize boxes to [0, 1] range relative to ORIGINAL image dimensions
-                boxes = visual_prompt_data['boxes'].astype(np.float32)
-                print(f"[DEBUG] Original boxes (absolute coords): {boxes}")
-                
-                normalized_boxes = np.copy(boxes)
-                normalized_boxes[:, [0, 2]] /= orig_w  # Normalize x coordinates
-                normalized_boxes[:, [1, 3]] /= orig_h  # Normalize y coordinates
-                
-                # DEBUG: Print normalized boxes in xyxy format
-                print(f"[DEBUG] Normalized boxes (0-1 range, xyxy): {normalized_boxes}")
-                
-                # YOLOE might expect boxes in cxcywh format (center_x, center_y, width, height)
-                # Convert from xyxy to cxcywh
-                cxcywh_boxes = np.copy(normalized_boxes)
-                cxcywh_boxes[:, 0] = (normalized_boxes[:, 0] + normalized_boxes[:, 2]) / 2  # center_x
-                cxcywh_boxes[:, 1] = (normalized_boxes[:, 1] + normalized_boxes[:, 3]) / 2  # center_y
-                cxcywh_boxes[:, 2] = normalized_boxes[:, 2] - normalized_boxes[:, 0]  # width
-                cxcywh_boxes[:, 3] = normalized_boxes[:, 3] - normalized_boxes[:, 1]  # height
-                
-                # DEBUG: Print boxes in cxcywh format
-                print(f"[DEBUG] Boxes in cxcywh format: {cxcywh_boxes}")
-                
-                # Boxes: Convert to tensor with batch dimension (B, N, D) where B=1, N=num_boxes, D=4
-                # Make sure we maintain the (B, N, 4) shape
-                boxes_tensor = torch.from_numpy(cxcywh_boxes).unsqueeze(0).float()
-                
-                # ALTERNATIVE: Try xyxy format if cxcywh doesn't work
-                # boxes_tensor = torch.from_numpy(normalized_boxes).unsqueeze(0).float()
-                
-                # DEBUG: Print box tensor shape
-                print(f"[DEBUG] Box tensor shape: {boxes_tensor.shape}")
-                print(f"[DEBUG] Box tensor ndim: {boxes_tensor.ndim}")
-                print(f"[DEBUG] Box tensor dtype: {boxes_tensor.dtype}")
-                print(f"[DEBUG] Box tensor values:\n{boxes_tensor}")
-                
-                # Try using set_prompts if available
-                if hasattr(loaded_model, 'set_prompts'):
-                    print(f"[DEBUG] Using set_prompts method")
-                    try:
-                        loaded_model.set_prompts(image_tensor, boxes_tensor)
-                        print(f"[DEBUG] set_prompts succeeded")
-                    except Exception as e:
-                        print(f"[DEBUG] set_prompts with cxcywh failed: {e}")
-                        print(f"[DEBUG] Trying set_prompts with xyxy format")
-                        # Try with xyxy format instead
-                        boxes_tensor_xyxy = torch.from_numpy(normalized_boxes).unsqueeze(0).float()
-                        print(f"[DEBUG] Trying set_prompts with xyxy format, shape: {boxes_tensor_xyxy.shape}")
-                        try:
-                            loaded_model.set_prompts(image_tensor, boxes_tensor_xyxy)
-                            print(f"[DEBUG] set_prompts with xyxy succeeded")
-                        except Exception as e2:
-                            print(f"[ERROR] set_prompts with xyxy also failed: {e2}")
-                            raise e2
-                else:
-                    print(f"[WARN] Visual prompting not directly supported, using fallback")
-                    # Fallback: use generic class name
-                    loaded_model.set_classes(["object"], loaded_model.get_text_pe(["object"]))
-            except Exception as e:
-                error_msg = str(e) if str(e) else "Unknown error"
-                print(f"[ERROR] Failed to set visual prompts: {error_msg}")
-                print(f"[ERROR] Traceback: {traceback.format_exc()}")
-                print(f"[INFO] Falling back to generic object detection")
-                loaded_model.set_classes(["object"], loaded_model.get_text_pe(["object"]))
-                visual_prompt_success = False
+        # Validate visual prompt data
+        print(f"[INFO] Validating visual prompts with {len(visual_prompt_data['boxes'])} boxes")
+        try:
+            boxes = visual_prompt_data['boxes']
+            if len(boxes) == 0:
+                raise ValueError("No boxes provided")
+            
+            # Boxes should be in absolute pixel coordinates (x1, y1, x2, y2)
+            print(f"[DEBUG] Visual prompt boxes (absolute coords): {boxes}")
+            print(f"[INFO] Visual prompting configured successfully")
+            print(f"[INFO] Note: Visual prompts will be applied per-frame during inference")
+            
+        except Exception as e:
+            error_msg = str(e) if str(e) else "Unknown error"
+            print(f"[ERROR] Failed to validate visual prompts: {error_msg}")
+            print(f"[ERROR] Traceback: {traceback.format_exc()}")
+            visual_prompt_success = False
+    else:
+        # Text prompting mode: can use ONNX model if cached
+        if os.path.exists(onnx_model_path):
+            print(f"[INFO] Loading cached ONNX model from {onnx_model_path}")
+            loaded_model = YOLOE(onnx_model_path)
+            print(f"[INFO] Using cached model with classes: {class_names}")
         else:
+            print(f"[INFO] ONNX model not found. Exporting from PyTorch model...")
+            loaded_model = YOLOE(pt_model_path)
+            
             # Text prompting mode: use class names
             loaded_model.set_classes(class_names, loaded_model.get_text_pe(class_names))
-        
-        export_model = loaded_model.export(format="onnx", imgsz=320)
-        # Reload with the exported ONNX model
-        loaded_model = YOLOE(export_model)
-        print(f"[INFO] ONNX model exported and cached at {export_model}")
-        if visual_prompt_data is not None:
-            if visual_prompt_success:
-                print(f"[INFO] Model set up with visual prompts")
-            else:
-                print(f"[WARN] Model set up with fallback (visual prompts failed)")
-        else:
+            
+            export_model = loaded_model.export(format="onnx", imgsz=320)
+            # Reload with the exported ONNX model
+            loaded_model = YOLOE(export_model)
+            print(f"[INFO] ONNX model exported and cached at {export_model}")
             print(f"[INFO] Model classes set to: {class_names}")
     
-    # Warm up the model to initialize ONNX Runtime session
-    # This prevents the ~2 minute delay on first inference
-    print(f"[INFO] Warming up model {model_size} (initializing ONNX Runtime session)...")
+    # Warm up the model to initialize inference session
+    # This prevents delays on first inference
+    print(f"[INFO] Warming up model {model_size}...")
     dummy_frame = np.zeros((320, 320, 3), dtype=np.uint8)
-    _ = list(loaded_model.track(source=dummy_frame, conf=0.2, iou=0.4, show=False, persist=True, verbose=False))
+    if visual_prompt_data is not None:
+        # For visual prompting, warm up with predict() and YOLOEVPSegPredictor
+        from ultralytics.models.yolo.yoloe import YOLOEVPSegPredictor
+        dummy_visual_prompts = {
+            'bboxes': [[10, 10, 50, 50]],  # List of boxes
+            'cls': [0]  # List of class IDs (integers)
+        }
+        _ = list(loaded_model.predict(source=dummy_frame, visual_prompts=dummy_visual_prompts, 
+                                      predictor=YOLOEVPSegPredictor, conf=0.2, show=False, verbose=False))
+    else:
+        # For text prompting, warm up with track()
+        _ = list(loaded_model.track(source=dummy_frame, conf=0.2, iou=0.4, show=False, persist=True, verbose=False))
     print(f"[INFO] Model {model_size} warm-up complete - ready for inference")
     
     return loaded_model, visual_prompt_success
@@ -200,6 +139,7 @@ camera_manager = None  # Background camera manager
 snapshot_frame = None
 snapshot_boxes = []  # List of bounding boxes [(x1, y1, x2, y2), ...]
 use_visual_prompt = False
+visual_prompt_dict = None  # Dict with 'bboxes' and 'cls' for predict() API
 
 # Performance monitoring
 fps_counter = 0
@@ -239,19 +179,25 @@ def inference_thread():
     """Runs YOLO inference in a background thread."""
     global latest_frame, running, current_camera, thread_alive
     global fps_counter, fps_start_time, current_fps, inference_time, detection_count
+    global use_visual_prompt, visual_prompt_dict
 
     thread_alive = True
     print(f"[INFO] Starting inference on camera {current_camera}")
     print(f"[INFO] Detection parameters: conf={current_conf}, iou={current_iou}")
-
-    # Reset tracker state to avoid tracking issues when switching cameras
-    try:
-        if hasattr(model, 'predictor') and model.predictor is not None:
-            if hasattr(model.predictor, 'trackers') and model.predictor.trackers:
-                model.predictor.trackers[0].reset()
-                print(f"[INFO] Tracker reset for camera {current_camera}")
-    except Exception as e:
-        print(f"[WARN] Could not reset tracker: {e}")
+    
+    if use_visual_prompt:
+        print(f"[INFO] Using visual prompting mode")
+        from ultralytics.models.yolo.yoloe import YOLOEVPSegPredictor
+    else:
+        print(f"[INFO] Using text prompting mode")
+        # Reset tracker state to avoid tracking issues when switching cameras
+        try:
+            if hasattr(model, 'predictor') and model.predictor is not None:
+                if hasattr(model.predictor, 'trackers') and model.predictor.trackers:
+                    model.predictor.trackers[0].reset()
+                    print(f"[INFO] Tracker reset for camera {current_camera}")
+        except Exception as e:
+            print(f"[WARN] Could not reset tracker: {e}")
 
     # Get camera from manager (pre-opened if available)
     cap = camera_manager.get_camera(current_camera) if camera_manager else cv2.VideoCapture(current_camera)
@@ -276,44 +222,72 @@ def inference_thread():
         # Measure inference time
         inference_start = time.time()
         
-        # Run inference with configurable parameters
+        # Run inference based on prompting mode
         detections_found = 0
-        for result in model.track(source=frame, conf=current_conf, iou=current_iou, show=False, persist=True):
-            frame = result.orig_img.copy()
-            boxes = result.boxes.xyxy.cpu().numpy().astype(int)
-            names = result.names
-            detections_found = len(boxes)
+        
+        if use_visual_prompt and visual_prompt_dict is not None:
+            # Visual prompting mode: use predict() with YOLOEVPSegPredictor
+            # Pass visual prompts per-frame
+            results = model.predict(
+                source=frame, 
+                visual_prompts=visual_prompt_dict,
+                predictor=YOLOEVPSegPredictor,
+                conf=current_conf,
+                show=False,
+                verbose=False
+            )
             
-            for box, cls_id in zip(boxes, result.boxes.cls):
-                x1, y1, x2, y2 = box
-                label = names[int(cls_id)]
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(frame, label, (x1, y1 + 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            # Process results (predict returns a list, not a generator)
+            for result in results:
+                frame = result.orig_img.copy()
+                boxes = result.boxes.xyxy.cpu().numpy().astype(int)
+                names = result.names
+                detections_found = len(boxes)
+                
+                for box, cls_id in zip(boxes, result.boxes.cls):
+                    x1, y1, x2, y2 = box
+                    label = names[int(cls_id)]
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(frame, label, (x1, y1 + 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        else:
+            # Text prompting mode: use track() for continuous tracking
+            for result in model.track(source=frame, conf=current_conf, iou=current_iou, show=False, persist=True):
+                frame = result.orig_img.copy()
+                boxes = result.boxes.xyxy.cpu().numpy().astype(int)
+                names = result.names
+                detections_found = len(boxes)
+                
+                for box, cls_id in zip(boxes, result.boxes.cls):
+                    x1, y1, x2, y2 = box
+                    label = names[int(cls_id)]
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(frame, label, (x1, y1 + 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-            # Calculate and display performance info on frame
-            inference_time = time.time() - inference_start
-            fps_counter += 1
-            elapsed = time.time() - fps_start_time
-            if elapsed >= 1.0:
-                current_fps = fps_counter / elapsed
-                fps_counter = 0
-                fps_start_time = time.time()
-            
-            detection_count = detections_found
-            
-            # Add performance overlay
-            perf_text = f"FPS: {current_fps:.1f} | Inference: {inference_time*1000:.1f}ms | Detections: {detection_count}"
-            cv2.putText(frame, perf_text, (10, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-            
-            # Add parameter info
-            param_text = f"Conf: {current_conf:.2f} | IoU: {current_iou:.2f}"
-            cv2.putText(frame, param_text, (10, 60),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+        # Calculate and display performance info on frame
+        inference_time = time.time() - inference_start
+        fps_counter += 1
+        elapsed = time.time() - fps_start_time
+        if elapsed >= 1.0:
+            current_fps = fps_counter / elapsed
+            fps_counter = 0
+            fps_start_time = time.time()
+        
+        detection_count = detections_found
+        
+        # Add performance overlay
+        perf_text = f"FPS: {current_fps:.1f} | Inference: {inference_time*1000:.1f}ms | Detections: {detection_count}"
+        cv2.putText(frame, perf_text, (10, 30),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+        
+        # Add parameter info
+        param_text = f"Conf: {current_conf:.2f} | IoU: {current_iou:.2f}"
+        cv2.putText(frame, param_text, (10, 60),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
 
-            with lock:
-                latest_frame = frame.copy()
+        with lock:
+            latest_frame = frame.copy()
 
         time.sleep(0.001)
 
@@ -844,7 +818,7 @@ def snapshot_image():
 @app.route('/save_visual_prompt', methods=['POST'])
 def save_visual_prompt():
     """Save the snapshot with drawn bounding boxes as visual prompt."""
-    global snapshot_boxes, use_visual_prompt, model, snapshot_frame
+    global snapshot_boxes, use_visual_prompt, model, snapshot_frame, visual_prompt_dict
     
     if running:
         return "<html><body><h3>Stop inference first!</h3><a href='/'>Back</a></body></html>"
@@ -876,41 +850,65 @@ def save_visual_prompt():
         
         print(f"[DEBUG] Snapshot boxes (absolute coords): {snapshot_boxes}")
         
+        # Create visual prompt dictionary in the format expected by predict()
+        # According to implementation inspection:
+        # visual_prompts = dict(
+        #     bboxes=[[x1, y1, x2, y2], ...],  # List of boxes
+        #     cls=[0, 0, ...]  # List of class IDs (integers 0-based)
+        # )
+        # The num_cls is calculated from len(set(cls)), so integers are expected
+        
+        # Convert to list of lists for bboxes (API expects list)
+        bboxes_list = [box for box in snapshot_boxes]  # List of [x1, y1, x2, y2]
+        
+        # Create list of class IDs (all 0 for generic detection)
+        cls_list = [0] * len(snapshot_boxes)
+        
+        visual_prompt_dict = {
+            'bboxes': bboxes_list,  # List of boxes
+            'cls': cls_list  # List of class IDs (integers)
+        }
+        
+        print(f"[INFO] Created visual prompt dict with {len(snapshot_boxes)} boxes")
+        print(f"[DEBUG] Visual prompt bboxes: {visual_prompt_dict['bboxes']}")
+        print(f"[DEBUG] Visual prompt cls: {visual_prompt_dict['cls']}")
+        
         # Switch to visual prompting mode
         use_visual_prompt = True
         
-        # Delete cached ONNX model to force re-export with visual prompts
+        # Delete cached ONNX model since we're using PyTorch model for visual prompting
         onnx_model_path = f"yoloe-11{current_model}-seg.onnx"
         if os.path.exists(onnx_model_path):
             os.remove(onnx_model_path)
-            print(f"[INFO] Removed cached ONNX model to re-export with visual prompts")
+            print(f"[INFO] Removed cached ONNX model (using PyTorch for visual prompting)")
         
-        # Prepare visual prompt data
+        # Prepare visual prompt data for model loading
         visual_prompt_data = {
             'image': snapshot_frame,
-            'boxes': np.array(snapshot_boxes)
+            'boxes': boxes_array
         }
         
-        # Reload the model with visual prompts
-        print(f"[INFO] Setting up visual prompts with {len(snapshot_boxes)} boxes")
+        # Reload the model for visual prompting
+        print(f"[INFO] Loading model for visual prompting with {len(snapshot_boxes)} boxes")
         model, success = load_model(current_model, visual_prompt_data=visual_prompt_data)
         
         if success:
-            print(f"[INFO] Visual prompts set successfully")
+            print(f"[INFO] Model loaded successfully for visual prompting")
         else:
-            print(f"[WARN] Visual prompts could not be set - using fallback generic detection")
+            print(f"[WARN] Visual prompt validation failed")
         
         return '<meta http-equiv="refresh" content="0; url=/" />'
         
     except Exception as e:
         print(f"[ERROR] Failed to save visual prompt: {e}")
+        print(f"[ERROR] Traceback: {traceback.format_exc()}")
         return f"<html><body><h3>Error: {str(e)}</h3><a href='/'>Back</a></body></html>"
 
 
 @app.route('/clear_visual_prompt', methods=['POST'])
 def clear_visual_prompt():
     """Clear visual prompts and return to text prompting mode."""
-    global use_visual_prompt, snapshot_frame, snapshot_boxes, model
+    global use_visual_prompt, snapshot_frame, snapshot_boxes, model, visual_prompt_dict
     
     if running:
         return "<html><body><h3>Stop inference first!</h3><a href='/'>Back</a></body></html>"
@@ -918,6 +916,7 @@ def clear_visual_prompt():
     use_visual_prompt = False
     snapshot_frame = None
     snapshot_boxes = []
+    visual_prompt_dict = None
     
     # Delete cached ONNX model to force re-export with text prompts
     onnx_model_path = f"yoloe-11{current_model}-seg.onnx"

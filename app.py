@@ -134,27 +134,17 @@ def load_model(model_size, class_names=None, visual_prompt_data=None):
                         loaded_model.set_prompts(image_tensor, boxes_tensor)
                         print(f"[DEBUG] set_prompts succeeded")
                     except Exception as e:
-                        print(f"[DEBUG] set_prompts failed: {e}")
+                        print(f"[DEBUG] set_prompts with cxcywh failed: {e}")
+                        print(f"[DEBUG] Trying set_prompts with xyxy format")
                         # Try with xyxy format instead
                         boxes_tensor_xyxy = torch.from_numpy(normalized_boxes).unsqueeze(0).float()
                         print(f"[DEBUG] Trying set_prompts with xyxy format, shape: {boxes_tensor_xyxy.shape}")
-                        loaded_model.set_prompts(image_tensor, boxes_tensor_xyxy)
-                # Fallback: use get_visual_pe to get visual prompt embeddings
-                elif hasattr(loaded_model, 'get_visual_pe'):
-                    print(f"[DEBUG] Using get_visual_pe method")
-                    print(f"[DEBUG] Calling get_visual_pe with image_tensor shape: {image_tensor.shape}, boxes_tensor shape: {boxes_tensor.shape}")
-                    try:
-                        visual_pe = loaded_model.get_visual_pe(image_tensor, boxes_tensor)
-                        print(f"[DEBUG] get_visual_pe succeeded, visual_pe shape: {visual_pe.shape if hasattr(visual_pe, 'shape') else 'N/A'}")
-                        loaded_model.set_classes(["object"], visual_pe)
-                    except Exception as e:
-                        print(f"[DEBUG] get_visual_pe with cxcywh failed: {e}")
-                        # Try with xyxy format instead
-                        boxes_tensor_xyxy = torch.from_numpy(normalized_boxes).unsqueeze(0).float()
-                        print(f"[DEBUG] Trying get_visual_pe with xyxy format, shape: {boxes_tensor_xyxy.shape}")
-                        visual_pe = loaded_model.get_visual_pe(image_tensor, boxes_tensor_xyxy)
-                        print(f"[DEBUG] get_visual_pe with xyxy succeeded, visual_pe shape: {visual_pe.shape if hasattr(visual_pe, 'shape') else 'N/A'}")
-                        loaded_model.set_classes(["object"], visual_pe)
+                        try:
+                            loaded_model.set_prompts(image_tensor, boxes_tensor_xyxy)
+                            print(f"[DEBUG] set_prompts with xyxy succeeded")
+                        except Exception as e2:
+                            print(f"[ERROR] set_prompts with xyxy also failed: {e2}")
+                            raise e2
                 else:
                     print(f"[WARN] Visual prompting not directly supported, using fallback")
                     # Fallback: use generic class name

@@ -214,6 +214,7 @@ The application now includes configurable detection parameters to optimize track
 
 - [PERFORMANCE_GUIDE.md](PERFORMANCE_GUIDE.md) - Complete guide to detection parameters, hardware, and troubleshooting
 - [VISUAL_PROMPTING_FEATURE.md](VISUAL_PROMPTING_FEATURE.md) - Visual prompting feature documentation
+- [VISUAL_PROMPT_SHAPE_FIX.md](VISUAL_PROMPT_SHAPE_FIX.md) - Fix for visual prompt shape mismatch error
 - [CUSTOM_CLASSES_FEATURE.md](CUSTOM_CLASSES_FEATURE.md) - Custom class prompts feature documentation
 - [TRACKER_RESET_FIX.md](TRACKER_RESET_FIX.md) - Explanation of tracker reset fix for camera switching
 - [MODEL_WARMUP_FIX.md](MODEL_WARMUP_FIX.md) - Explanation of model warm-up fix for first inference delay
@@ -231,11 +232,15 @@ YoloE/
 ├── test_custom_classes.py        # Custom classes test suite
 ├── test_tracker_reset.py         # Tracker reset test suite
 ├── test_visual_prompting.py      # Visual prompting test suite
+├── test_visual_prompt_resize.py  # Visual prompt resize test suite
+├── test_box_tensor_fix.py        # Box tensor dimension test suite
 ├── verify_camera_manager.py      # Camera manager verification script
 ├── verify_model_caching.py       # Model caching verification script
 ├── verify_model_warmup.py        # Model warm-up verification script
 ├── README.md                     # This file
 ├── VISUAL_PROMPTING_FEATURE.md   # Visual prompting feature documentation
+├── VISUAL_PROMPT_SHAPE_FIX.md    # Visual prompt shape fix documentation
+├── FIX_SUMMARY_SHAPE_ISSUE.md    # Shape issue fix summary
 ├── CUSTOM_CLASSES_FEATURE.md     # Custom classes feature documentation
 ├── TRACKER_RESET_FIX.md          # Tracker reset fix documentation
 ├── MODEL_WARMUP_FIX.md           # Model warm-up fix documentation

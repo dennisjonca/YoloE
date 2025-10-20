@@ -885,7 +885,7 @@ def save_visual_prompt():
         # Prepare visual prompt data for model loading
         visual_prompt_data = {
             'image': snapshot_frame,
-            'boxes': boxes_array
+            'boxes': bboxes_list
         }
         
         # Reload the model for visual prompting

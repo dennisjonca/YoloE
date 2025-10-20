@@ -275,7 +275,7 @@ def index():
     
     # Get hardware information
     hw_info = get_hardware_info()
-    hardware_status = f"⚙️ {hw_info['device_name']} ({hw_info['cpu_count']} CPU cores)"
+    hardware_status = f"{hw_info['device_name']} ({hw_info['cpu_count']} CPU cores)"
 
     camera_options_html = "".join(
         [f'<option value="{cam}" {"selected" if cam == current_camera else ""}>Camera {cam}</option>'

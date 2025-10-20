@@ -75,8 +75,8 @@ def load_model(model_size, class_names=None, visual_prompt_data=None):
                 # Convert numpy arrays to PyTorch tensors
                 # Image: Convert from HWC (Height, Width, Channels) to CHW (Channels, Height, Width)
                 image_tensor = torch.from_numpy(visual_prompt_data['image']).permute(2, 0, 1).unsqueeze(0).float()
-                # Boxes: Convert to tensor
-                boxes_tensor = torch.from_numpy(visual_prompt_data['boxes']).float()
+                # Boxes: Convert to tensor with batch dimension (B, N, D) where B=1, N=num_boxes, D=4
+                boxes_tensor = torch.from_numpy(visual_prompt_data['boxes']).unsqueeze(0).float()
                 
                 # Try using set_prompts if available
                 if hasattr(loaded_model, 'set_prompts'):

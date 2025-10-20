@@ -2,6 +2,7 @@ from flask import Flask, Response, request
 from ultralytics import YOLOE
 import cv2, threading, time, platform, os
 import numpy as np
+import torch
 from camera_manager import CameraManager
 
 app = Flask(__name__)
@@ -13,6 +14,29 @@ app = Flask(__name__)
 available_models = ["s", "m", "l"]
 current_model = "s"  # Default model size
 current_classes = "person, plant"  # Default class prompts
+
+# Detection parameters
+current_conf = 0.25  # Default confidence threshold (0.0 - 1.0)
+current_iou = 0.45   # Default IoU threshold for NMS (0.0 - 1.0)
+
+def get_hardware_info():
+    """Get information about available hardware for inference."""
+    import torch
+    info = {
+        'cpu_count': os.cpu_count(),
+        'cuda_available': torch.cuda.is_available(),
+        'cuda_device_count': 0,
+        'cuda_device_name': None,
+        'device_name': 'CPU'
+    }
+    
+    if info['cuda_available']:
+        info['cuda_device_count'] = torch.cuda.device_count()
+        if info['cuda_device_count'] > 0:
+            info['cuda_device_name'] = torch.cuda.get_device_name(0)
+            info['device_name'] = f"GPU: {info['cuda_device_name']}"
+    
+    return info
 
 def load_model(model_size, class_names=None, visual_prompt_data=None):
     """Load YOLO model with the specified size (s, m, or l) and class names or visual prompts."""
@@ -97,6 +121,13 @@ snapshot_frame = None
 snapshot_boxes = []  # List of bounding boxes [(x1, y1, x2, y2), ...]
 use_visual_prompt = False
 
+# Performance monitoring
+fps_counter = 0
+fps_start_time = time.time()
+current_fps = 0.0
+inference_time = 0.0
+detection_count = 0
+
 
 # -------------------------------
 # 🔍 Camera Detection Utility (Deprecated - Now handled by CameraManager)
@@ -127,9 +158,11 @@ def detect_cameras(max_devices: int = 10):
 def inference_thread():
     """Runs YOLO inference in a background thread."""
     global latest_frame, running, current_camera, thread_alive
+    global fps_counter, fps_start_time, current_fps, inference_time, detection_count
 
     thread_alive = True
     print(f"[INFO] Starting inference on camera {current_camera}")
+    print(f"[INFO] Detection parameters: conf={current_conf}, iou={current_iou}")
 
     # Reset tracker state to avoid tracking issues when switching cameras
     try:
@@ -148,6 +181,11 @@ def inference_thread():
         thread_alive = False
         return
 
+    # Reset performance counters
+    fps_counter = 0
+    fps_start_time = time.time()
+    current_fps = 0.0
+
     while running:
         success, frame = cap.read()
         if not success:
@@ -155,17 +193,44 @@ def inference_thread():
             time.sleep(2)
             continue
 
-        # Run inference
-        for result in model.track(source=frame, conf=0.1, iou=0.5, show=False, persist=True):
+        # Measure inference time
+        inference_start = time.time()
+        
+        # Run inference with configurable parameters
+        detections_found = 0
+        for result in model.track(source=frame, conf=current_conf, iou=current_iou, show=False, persist=True):
             frame = result.orig_img.copy()
             boxes = result.boxes.xyxy.cpu().numpy().astype(int)
             names = result.names
+            detections_found = len(boxes)
+            
             for box, cls_id in zip(boxes, result.boxes.cls):
                 x1, y1, x2, y2 = box
                 label = names[int(cls_id)]
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 cv2.putText(frame, label, (x1, y1 + 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+            # Calculate and display performance info on frame
+            inference_time = time.time() - inference_start
+            fps_counter += 1
+            elapsed = time.time() - fps_start_time
+            if elapsed >= 1.0:
+                current_fps = fps_counter / elapsed
+                fps_counter = 0
+                fps_start_time = time.time()
+            
+            detection_count = detections_found
+            
+            # Add performance overlay
+            perf_text = f"FPS: {current_fps:.1f} | Inference: {inference_time*1000:.1f}ms | Detections: {detection_count}"
+            cv2.putText(frame, perf_text, (10, 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+            
+            # Add parameter info
+            param_text = f"Conf: {current_conf:.2f} | IoU: {current_iou:.2f}"
+            cv2.putText(frame, param_text, (10, 60),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
 
             with lock:
                 latest_frame = frame.copy()
@@ -204,9 +269,13 @@ def gen_frames():
 @app.route('/')
 def index():
     """Main HTML page with control buttons."""
-    status = "🟢 Running" if running else "🔴 Stopped"
-    prompt_mode = "🎯 Visual Prompting" if use_visual_prompt else "📝 Text Prompting"
+    status = "Running" if running else "Stopped"
+    prompt_mode = "Visual Prompting" if use_visual_prompt else "Text Prompting"
     has_snapshot = snapshot_frame is not None
+    
+    # Get hardware information
+    hw_info = get_hardware_info()
+    hardware_status = f"{hw_info['device_name']} ({hw_info['cpu_count']} CPU cores)"
 
     camera_options_html = "".join(
         [f'<option value="{cam}" {"selected" if cam == current_camera else ""}>Camera {cam}</option>'
@@ -252,14 +321,16 @@ def index():
             </style>
         </head>
         <body>
-        <h1>YOLO Live Stream with Visual Prompting</h1>
+        <h1>YOLO Stream with Live Inference</h1>
         
         <div class="section">
             <h2>Status & Controls</h2>
             <h3>Status: {status}</h3>
+            <h3>Hardware: {hardware_status}</h3>
             <h3>Current Model: YoloE-11{current_model.upper()}</h3>
             <h3>Prompt Mode: {prompt_mode}</h3>
             {"<h3>Current Classes: " + current_classes + "</h3>" if not use_visual_prompt else "<h3>Visual Prompts Active: " + str(len(snapshot_boxes)) + " boxes</h3>"}
+            {f"<h3>Performance: {current_fps:.1f} FPS | {inference_time*1000:.1f}ms inference | {detection_count} detections</h3>" if running else ""}
             
             <form action="/start" method="post" style="display:inline;">
                 <input type="submit" value="Start Inference" {"disabled" if running else ""} class="button">
@@ -286,6 +357,28 @@ def index():
                 </select>
                 <input type="submit" value="Switch Model" {"disabled" if running else ""} class="button">
             </form>
+        </div>
+        
+        <div class="section">
+            <h2>Detection Parameters</h2>
+            <p>Adjust these parameters to improve detection performance. Lower confidence detects more objects but may include false positives.</p>
+            <form action="/set_parameters" method="post">
+                <label for="conf">Confidence Threshold (0.0 - 1.0):</label>
+                <input type="number" name="conf" id="conf" value="{current_conf}" min="0.0" max="1.0" step="0.05" {"disabled" if running else ""}><br><br>
+                
+                <label for="iou">IoU Threshold (0.0 - 1.0):</label>
+                <input type="number" name="iou" id="iou" value="{current_iou}" min="0.0" max="1.0" step="0.05" {"disabled" if running else ""}><br><br>
+                
+                <input type="submit" value="Update Parameters" {"disabled" if running else ""} class="button">
+            </form>
+            <p style="font-size: 0.9em; color: #666;">
+                <strong>Tips:</strong><br>
+                • Confidence 0.15-0.25: More detections, may include false positives<br>
+                • Confidence 0.25-0.40: Balanced (recommended for most cases)<br>
+                • Confidence 0.40-0.60: High confidence, fewer false positives<br>
+                • IoU 0.40-0.50: More lenient overlap detection<br>
+                • IoU 0.50-0.60: Standard overlap detection
+            </p>
         </div>
         
         <div class="section">
@@ -541,6 +634,34 @@ def set_model():
     model = load_model(current_model, current_classes.split(", "))
     print(f"[INFO] Model changed to YoloE-11{current_model.upper()}")
     
+    return '<meta http-equiv="refresh" content="0; url=/" />'
+
+
+@app.route('/set_parameters', methods=['POST'])
+def set_parameters():
+    """Change detection parameters (only allowed when stopped)."""
+    global current_conf, current_iou
+
+    if running:
+        return "<html><body><h3>Stop inference first!</h3><a href='/'>Back</a></body></html>"
+
+    try:
+        new_conf = float(request.form.get("conf"))
+        new_iou = float(request.form.get("iou"))
+    except (TypeError, ValueError):
+        return "Invalid parameters", 400
+
+    # Validate ranges
+    if not (0.0 <= new_conf <= 1.0):
+        return "<html><body><h3>Confidence must be between 0.0 and 1.0</h3><a href='/'>Back</a></body></html>"
+    
+    if not (0.0 <= new_iou <= 1.0):
+        return "<html><body><h3>IoU must be between 0.0 and 1.0</h3><a href='/'>Back</a></body></html>"
+
+    current_conf = new_conf
+    current_iou = new_iou
+    
+    print(f"[INFO] Detection parameters updated: conf={current_conf}, iou={current_iou}")
     return '<meta http-equiv="refresh" content="0; url=/" />'
 
 

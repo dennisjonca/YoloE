@@ -194,8 +194,24 @@ python test_tracker_reset.py
 
 This verifies that the tracker reset functionality is properly implemented to prevent tracking issues when switching cameras.
 
+## Performance Tuning
+
+The application now includes configurable detection parameters to optimize tracking performance:
+
+- **Confidence Threshold**: Adjust how certain the model must be to report a detection (default: 0.25)
+- **IoU Threshold**: Control how overlapping detections are merged (default: 0.45)
+- **Real-time Metrics**: View FPS, inference time, and detection count on the video feed
+- **Hardware Detection**: Automatic detection of CPU vs GPU for performance optimization
+
+**If objects are not being tracked:**
+1. Lower the confidence threshold (e.g., from 0.25 to 0.15)
+2. Check the performance metrics on the video feed
+3. Verify your hardware capabilities (CPU vs GPU)
+4. See [PERFORMANCE_GUIDE.md](PERFORMANCE_GUIDE.md) for detailed optimization tips
+
 ## Documentation
 
+- [PERFORMANCE_GUIDE.md](PERFORMANCE_GUIDE.md) - Complete guide to detection parameters, hardware, and troubleshooting
 - [VISUAL_PROMPTING_FEATURE.md](VISUAL_PROMPTING_FEATURE.md) - Visual prompting feature documentation
 - [CUSTOM_CLASSES_FEATURE.md](CUSTOM_CLASSES_FEATURE.md) - Custom class prompts feature documentation
 - [TRACKER_RESET_FIX.md](TRACKER_RESET_FIX.md) - Explanation of tracker reset fix for camera switching

@@ -79,25 +79,58 @@ def load_model(model_size, class_names=None, visual_prompt_data=None):
                 model_size = 320  # Match the export size (imgsz=320)
                 resized_image = cv2.resize(original_image, (model_size, model_size))
                 
+                # DEBUG: Print original image info
+                print(f"[DEBUG] Original image shape: {original_image.shape} (H={orig_h}, W={orig_w})")
+                print(f"[DEBUG] Resized image shape: {resized_image.shape}")
+                
                 # Convert numpy arrays to PyTorch tensors
                 # Image: Convert from HWC (Height, Width, Channels) to CHW (Channels, Height, Width)
                 image_tensor = torch.from_numpy(resized_image).permute(2, 0, 1).unsqueeze(0).float()
                 
+                # DEBUG: Print image tensor shape
+                print(f"[DEBUG] Image tensor shape: {image_tensor.shape}")
+                
                 # Normalize boxes to [0, 1] range relative to ORIGINAL image dimensions
                 boxes = visual_prompt_data['boxes'].astype(np.float32)
+                print(f"[DEBUG] Original boxes (absolute coords): {boxes}")
+                
                 normalized_boxes = np.copy(boxes)
                 normalized_boxes[:, [0, 2]] /= orig_w  # Normalize x coordinates
                 normalized_boxes[:, [1, 3]] /= orig_h  # Normalize y coordinates
                 
+                # DEBUG: Print normalized boxes in xyxy format
+                print(f"[DEBUG] Normalized boxes (0-1 range, xyxy): {normalized_boxes}")
+                
+                # YOLOE might expect boxes in cxcywh format (center_x, center_y, width, height)
+                # Convert from xyxy to cxcywh
+                cxcywh_boxes = np.copy(normalized_boxes)
+                cxcywh_boxes[:, 0] = (normalized_boxes[:, 0] + normalized_boxes[:, 2]) / 2  # center_x
+                cxcywh_boxes[:, 1] = (normalized_boxes[:, 1] + normalized_boxes[:, 3]) / 2  # center_y
+                cxcywh_boxes[:, 2] = normalized_boxes[:, 2] - normalized_boxes[:, 0]  # width
+                cxcywh_boxes[:, 3] = normalized_boxes[:, 3] - normalized_boxes[:, 1]  # height
+                
+                # DEBUG: Print boxes in cxcywh format
+                print(f"[DEBUG] Boxes in cxcywh format: {cxcywh_boxes}")
+                
                 # Boxes: Convert to tensor with batch dimension (B, N, D) where B=1, N=num_boxes, D=4
-                boxes_tensor = torch.from_numpy(normalized_boxes).unsqueeze(0).float()
+                # Try cxcywh format first
+                boxes_tensor = torch.from_numpy(cxcywh_boxes).unsqueeze(0).float()
+                
+                # DEBUG: Print box tensor shape
+                print(f"[DEBUG] Box tensor shape: {boxes_tensor.shape}")
+                print(f"[DEBUG] Box tensor dtype: {boxes_tensor.dtype}")
+                print(f"[DEBUG] Box tensor values: {boxes_tensor}")
                 
                 # Try using set_prompts if available
                 if hasattr(loaded_model, 'set_prompts'):
+                    print(f"[DEBUG] Using set_prompts method")
                     loaded_model.set_prompts(image_tensor, boxes_tensor)
                 # Fallback: use get_visual_pe to get visual prompt embeddings
                 elif hasattr(loaded_model, 'get_visual_pe'):
+                    print(f"[DEBUG] Using get_visual_pe method")
+                    print(f"[DEBUG] Calling get_visual_pe with image_tensor shape: {image_tensor.shape}, boxes_tensor shape: {boxes_tensor.shape}")
                     visual_pe = loaded_model.get_visual_pe(image_tensor, boxes_tensor)
+                    print(f"[DEBUG] Visual PE shape: {visual_pe.shape if hasattr(visual_pe, 'shape') else 'N/A'}")
                     loaded_model.set_classes(["object"], visual_pe)
                 else:
                     print(f"[WARN] Visual prompting not directly supported, using fallback")
@@ -806,6 +839,9 @@ def save_visual_prompt():
         
         # Convert boxes from relative coordinates to absolute coordinates
         h, w = snapshot_frame.shape[:2]
+        print(f"[DEBUG] Snapshot frame shape: {snapshot_frame.shape} (H={h}, W={w})")
+        print(f"[DEBUG] Boxes from UI (relative): {boxes_data}")
+        
         snapshot_boxes = []
         for box in boxes_data:
             x1 = int(box['x1'] * w)
@@ -813,6 +849,8 @@ def save_visual_prompt():
             x2 = int(box['x2'] * w)
             y2 = int(box['y2'] * h)
             snapshot_boxes.append([x1, y1, x2, y2])
+        
+        print(f"[DEBUG] Snapshot boxes (absolute coords): {snapshot_boxes}")
         
         # Switch to visual prompting mode
         use_visual_prompt = True

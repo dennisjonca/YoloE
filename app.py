@@ -79,26 +79,82 @@ def load_model(model_size, class_names=None, visual_prompt_data=None):
                 model_size = 320  # Match the export size (imgsz=320)
                 resized_image = cv2.resize(original_image, (model_size, model_size))
                 
+                # DEBUG: Print original image info
+                print(f"[DEBUG] Original image shape: {original_image.shape} (H={orig_h}, W={orig_w})")
+                print(f"[DEBUG] Resized image shape: {resized_image.shape}")
+                
                 # Convert numpy arrays to PyTorch tensors
                 # Image: Convert from HWC (Height, Width, Channels) to CHW (Channels, Height, Width)
-                image_tensor = torch.from_numpy(resized_image).permute(2, 0, 1).unsqueeze(0).float()
+                # Also normalize pixel values from [0, 255] to [0, 1]
+                image_tensor = torch.from_numpy(resized_image).permute(2, 0, 1).unsqueeze(0).float() / 255.0
+                
+                # DEBUG: Print image tensor shape and value range
+                print(f"[DEBUG] Image tensor shape: {image_tensor.shape}")
+                print(f"[DEBUG] Image tensor value range: [{image_tensor.min():.3f}, {image_tensor.max():.3f}]")
                 
                 # Normalize boxes to [0, 1] range relative to ORIGINAL image dimensions
                 boxes = visual_prompt_data['boxes'].astype(np.float32)
+                print(f"[DEBUG] Original boxes (absolute coords): {boxes}")
+                
                 normalized_boxes = np.copy(boxes)
                 normalized_boxes[:, [0, 2]] /= orig_w  # Normalize x coordinates
                 normalized_boxes[:, [1, 3]] /= orig_h  # Normalize y coordinates
                 
+                # DEBUG: Print normalized boxes in xyxy format
+                print(f"[DEBUG] Normalized boxes (0-1 range, xyxy): {normalized_boxes}")
+                
+                # YOLOE might expect boxes in cxcywh format (center_x, center_y, width, height)
+                # Convert from xyxy to cxcywh
+                cxcywh_boxes = np.copy(normalized_boxes)
+                cxcywh_boxes[:, 0] = (normalized_boxes[:, 0] + normalized_boxes[:, 2]) / 2  # center_x
+                cxcywh_boxes[:, 1] = (normalized_boxes[:, 1] + normalized_boxes[:, 3]) / 2  # center_y
+                cxcywh_boxes[:, 2] = normalized_boxes[:, 2] - normalized_boxes[:, 0]  # width
+                cxcywh_boxes[:, 3] = normalized_boxes[:, 3] - normalized_boxes[:, 1]  # height
+                
+                # DEBUG: Print boxes in cxcywh format
+                print(f"[DEBUG] Boxes in cxcywh format: {cxcywh_boxes}")
+                
                 # Boxes: Convert to tensor with batch dimension (B, N, D) where B=1, N=num_boxes, D=4
-                boxes_tensor = torch.from_numpy(normalized_boxes).unsqueeze(0).float()
+                # Make sure we maintain the (B, N, 4) shape
+                boxes_tensor = torch.from_numpy(cxcywh_boxes).unsqueeze(0).float()
+                
+                # ALTERNATIVE: Try xyxy format if cxcywh doesn't work
+                # boxes_tensor = torch.from_numpy(normalized_boxes).unsqueeze(0).float()
+                
+                # DEBUG: Print box tensor shape
+                print(f"[DEBUG] Box tensor shape: {boxes_tensor.shape}")
+                print(f"[DEBUG] Box tensor ndim: {boxes_tensor.ndim}")
+                print(f"[DEBUG] Box tensor dtype: {boxes_tensor.dtype}")
+                print(f"[DEBUG] Box tensor values:\n{boxes_tensor}")
                 
                 # Try using set_prompts if available
                 if hasattr(loaded_model, 'set_prompts'):
-                    loaded_model.set_prompts(image_tensor, boxes_tensor)
+                    print(f"[DEBUG] Using set_prompts method")
+                    try:
+                        loaded_model.set_prompts(image_tensor, boxes_tensor)
+                        print(f"[DEBUG] set_prompts succeeded")
+                    except Exception as e:
+                        print(f"[DEBUG] set_prompts failed: {e}")
+                        # Try with xyxy format instead
+                        boxes_tensor_xyxy = torch.from_numpy(normalized_boxes).unsqueeze(0).float()
+                        print(f"[DEBUG] Trying set_prompts with xyxy format, shape: {boxes_tensor_xyxy.shape}")
+                        loaded_model.set_prompts(image_tensor, boxes_tensor_xyxy)
                 # Fallback: use get_visual_pe to get visual prompt embeddings
                 elif hasattr(loaded_model, 'get_visual_pe'):
-                    visual_pe = loaded_model.get_visual_pe(image_tensor, boxes_tensor)
-                    loaded_model.set_classes(["object"], visual_pe)
+                    print(f"[DEBUG] Using get_visual_pe method")
+                    print(f"[DEBUG] Calling get_visual_pe with image_tensor shape: {image_tensor.shape}, boxes_tensor shape: {boxes_tensor.shape}")
+                    try:
+                        visual_pe = loaded_model.get_visual_pe(image_tensor, boxes_tensor)
+                        print(f"[DEBUG] get_visual_pe succeeded, visual_pe shape: {visual_pe.shape if hasattr(visual_pe, 'shape') else 'N/A'}")
+                        loaded_model.set_classes(["object"], visual_pe)
+                    except Exception as e:
+                        print(f"[DEBUG] get_visual_pe with cxcywh failed: {e}")
+                        # Try with xyxy format instead
+                        boxes_tensor_xyxy = torch.from_numpy(normalized_boxes).unsqueeze(0).float()
+                        print(f"[DEBUG] Trying get_visual_pe with xyxy format, shape: {boxes_tensor_xyxy.shape}")
+                        visual_pe = loaded_model.get_visual_pe(image_tensor, boxes_tensor_xyxy)
+                        print(f"[DEBUG] get_visual_pe with xyxy succeeded, visual_pe shape: {visual_pe.shape if hasattr(visual_pe, 'shape') else 'N/A'}")
+                        loaded_model.set_classes(["object"], visual_pe)
                 else:
                     print(f"[WARN] Visual prompting not directly supported, using fallback")
                     # Fallback: use generic class name
@@ -342,6 +398,8 @@ def index():
                 #snapshotCanvas {{
                     border: 2px solid #333;
                     cursor: crosshair;
+                    max-width: 100%;
+                    height: auto;
                 }}
                 .button {{
                     padding: 8px 16px;
@@ -482,8 +540,11 @@ def index():
                 if ({str(running).lower()} || !snapshotLoaded) return;
                 
                 const rect = canvas.getBoundingClientRect();
-                startX = e.clientX - rect.left;
-                startY = e.clientY - rect.top;
+                // Scale mouse coordinates to canvas logical coordinates
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                startX = (e.clientX - rect.left) * scaleX;
+                startY = (e.clientY - rect.top) * scaleY;
                 isDrawing = true;
             }});
             
@@ -491,8 +552,11 @@ def index():
                 if (!isDrawing) return;
                 
                 const rect = canvas.getBoundingClientRect();
-                const currentX = e.clientX - rect.left;
-                const currentY = e.clientY - rect.top;
+                // Scale mouse coordinates to canvas logical coordinates
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                const currentX = (e.clientX - rect.left) * scaleX;
+                const currentY = (e.clientY - rect.top) * scaleY;
                 
                 // Redraw everything
                 loadSnapshot();
@@ -507,8 +571,11 @@ def index():
                 if (!isDrawing) return;
                 
                 const rect = canvas.getBoundingClientRect();
-                const endX = e.clientX - rect.left;
-                const endY = e.clientY - rect.top;
+                // Scale mouse coordinates to canvas logical coordinates
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                const endX = (e.clientX - rect.left) * scaleX;
+                const endY = (e.clientY - rect.top) * scaleY;
                 
                 // Save the box (normalize to 0-1 range)
                 const x1 = Math.min(startX, endX) / canvas.width;
@@ -806,6 +873,9 @@ def save_visual_prompt():
         
         # Convert boxes from relative coordinates to absolute coordinates
         h, w = snapshot_frame.shape[:2]
+        print(f"[DEBUG] Snapshot frame shape: {snapshot_frame.shape} (H={h}, W={w})")
+        print(f"[DEBUG] Boxes from UI (relative): {boxes_data}")
+        
         snapshot_boxes = []
         for box in boxes_data:
             x1 = int(box['x1'] * w)
@@ -813,6 +883,8 @@ def save_visual_prompt():
             x2 = int(box['x2'] * w)
             y2 = int(box['y2'] * h)
             snapshot_boxes.append([x1, y1, x2, y2])
+        
+        print(f"[DEBUG] Snapshot boxes (absolute coords): {snapshot_boxes}")
         
         # Switch to visual prompting mode
         use_visual_prompt = True

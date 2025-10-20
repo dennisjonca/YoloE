@@ -64,12 +64,18 @@ def load_model(model_size, class_names=None, visual_prompt_data=None):
             # YOLOE visual prompting: extract features from reference image and boxes
             # The model will learn to track objects similar to those in the boxes
             try:
+                # Convert numpy arrays to PyTorch tensors
+                # Image: Convert from HWC (Height, Width, Channels) to CHW (Channels, Height, Width)
+                image_tensor = torch.from_numpy(visual_prompt_data['image']).permute(2, 0, 1).unsqueeze(0).float()
+                # Boxes: Convert to tensor
+                boxes_tensor = torch.from_numpy(visual_prompt_data['boxes']).float()
+                
                 # Try using set_prompts if available
                 if hasattr(loaded_model, 'set_prompts'):
-                    loaded_model.set_prompts(visual_prompt_data['image'], visual_prompt_data['boxes'])
+                    loaded_model.set_prompts(image_tensor, boxes_tensor)
                 # Fallback: use get_visual_pe to get visual prompt embeddings
                 elif hasattr(loaded_model, 'get_visual_pe'):
-                    visual_pe = loaded_model.get_visual_pe(visual_prompt_data['image'], visual_prompt_data['boxes'])
+                    visual_pe = loaded_model.get_visual_pe(image_tensor, boxes_tensor)
                     loaded_model.set_classes(["object"], visual_pe)
                 else:
                     print(f"[WARN] Visual prompting not directly supported, using fallback")

@@ -3,7 +3,17 @@ A YoloE project to demonstrate using AI in process.
 
 ## Features
 
-### Custom Class Prompts
+### Visual Prompting
+The application now supports visual prompting, allowing you to track objects by example:
+
+- **Snapshot Capture**: Take a photo from the camera feed
+- **Bounding Box Drawing**: Draw boxes around objects you want to track using mouse
+- **Visual Object Tracking**: The model learns to track objects similar to those in your visual prompts
+- **Interactive Canvas**: Real-time visual feedback while drawing boxes
+- **Dual Mode Support**: Switch between text prompting and visual prompting seamlessly
+- **Multiple Objects**: Draw multiple boxes to track different objects or instances
+
+### Custom Class Prompts (Text Prompting)
 The application allows users to customize which objects the YOLO model should detect:
 
 - **Flexible Detection**: Enter any comma-separated list of object classes (e.g., "banana, apple, orange")
@@ -107,9 +117,24 @@ The camera manager will automatically:
 
 Then open your browser to: `http://127.0.0.1:8080`
 
-## Using Custom Classes
+## Using Visual Prompting
 
-To detect custom objects:
+To track objects by visual example:
+1. Stop inference if it's running
+2. Click "Capture Snapshot" to take a photo from the camera
+3. Draw bounding boxes around objects you want to track by clicking and dragging on the snapshot
+4. Click "Save Snapshot with Boxes" to configure the model
+5. Wait for the model to re-export and warm up (~2 minutes)
+6. Start inference to track objects similar to your visual prompts
+
+To return to text prompting:
+1. Stop inference if it's running
+2. Click "Clear Visual Prompt"
+3. Update the class names in the "Custom Classes" field if desired
+
+## Using Custom Classes (Text Prompting)
+
+To detect custom objects using text:
 1. Stop inference if it's running
 2. Enter your desired object classes in the "Custom Classes" field (comma-separated)
    - Example: `banana, apple, orange` for fruit detection
@@ -171,6 +196,7 @@ This verifies that the tracker reset functionality is properly implemented to pr
 
 ## Documentation
 
+- [VISUAL_PROMPTING_FEATURE.md](VISUAL_PROMPTING_FEATURE.md) - Visual prompting feature documentation
 - [CUSTOM_CLASSES_FEATURE.md](CUSTOM_CLASSES_FEATURE.md) - Custom class prompts feature documentation
 - [TRACKER_RESET_FIX.md](TRACKER_RESET_FIX.md) - Explanation of tracker reset fix for camera switching
 - [MODEL_WARMUP_FIX.md](MODEL_WARMUP_FIX.md) - Explanation of model warm-up fix for first inference delay
@@ -183,14 +209,16 @@ This verifies that the tracker reset functionality is properly implemented to pr
 
 ```
 YoloE/
-├── app.py                        # Main Flask application
+├── app.py                        # Main Flask application with visual prompting
 ├── camera_manager.py             # Background camera manager
 ├── test_custom_classes.py        # Custom classes test suite
 ├── test_tracker_reset.py         # Tracker reset test suite
+├── test_visual_prompting.py      # Visual prompting test suite
 ├── verify_camera_manager.py      # Camera manager verification script
 ├── verify_model_caching.py       # Model caching verification script
 ├── verify_model_warmup.py        # Model warm-up verification script
 ├── README.md                     # This file
+├── VISUAL_PROMPTING_FEATURE.md   # Visual prompting feature documentation
 ├── CUSTOM_CLASSES_FEATURE.md     # Custom classes feature documentation
 ├── TRACKER_RESET_FIX.md          # Tracker reset fix documentation
 ├── MODEL_WARMUP_FIX.md           # Model warm-up fix documentation

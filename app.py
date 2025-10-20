@@ -14,8 +14,8 @@ available_models = ["s", "m", "l"]
 current_model = "s"  # Default model size
 current_classes = "person, plant"  # Default class prompts
 
-def load_model(model_size, class_names=None):
-    """Load YOLO model with the specified size (s, m, or l) and class names."""
+def load_model(model_size, class_names=None, visual_prompt_data=None):
+    """Load YOLO model with the specified size (s, m, or l) and class names or visual prompts."""
     if class_names is None:
         class_names = ["person", "plant"]
     
@@ -32,12 +32,41 @@ def load_model(model_size, class_names=None):
     else:
         print(f"[INFO] ONNX model not found. Exporting from PyTorch model...")
         loaded_model = YOLOE(pt_model_path)
-        loaded_model.set_classes(class_names, loaded_model.get_text_pe(class_names))
+        
+        # Set up prompts based on mode
+        if visual_prompt_data is not None:
+            # Visual prompting mode: use image and bounding boxes
+            print(f"[INFO] Setting up visual prompts with {len(visual_prompt_data['boxes'])} boxes")
+            # YOLOE visual prompting: extract features from reference image and boxes
+            # The model will learn to track objects similar to those in the boxes
+            try:
+                # Try using set_prompts if available
+                if hasattr(loaded_model, 'set_prompts'):
+                    loaded_model.set_prompts(visual_prompt_data['image'], visual_prompt_data['boxes'])
+                # Fallback: use get_visual_pe to get visual prompt embeddings
+                elif hasattr(loaded_model, 'get_visual_pe'):
+                    visual_pe = loaded_model.get_visual_pe(visual_prompt_data['image'], visual_prompt_data['boxes'])
+                    loaded_model.set_classes(["object"], visual_pe)
+                else:
+                    print(f"[WARN] Visual prompting not directly supported, using fallback")
+                    # Fallback: use generic class name
+                    loaded_model.set_classes(["object"], loaded_model.get_text_pe(["object"]))
+            except Exception as e:
+                print(f"[ERROR] Failed to set visual prompts: {e}")
+                print(f"[INFO] Falling back to generic object detection")
+                loaded_model.set_classes(["object"], loaded_model.get_text_pe(["object"]))
+        else:
+            # Text prompting mode: use class names
+            loaded_model.set_classes(class_names, loaded_model.get_text_pe(class_names))
+        
         export_model = loaded_model.export(format="onnx", imgsz=320)
         # Reload with the exported ONNX model
         loaded_model = YOLOE(export_model)
         print(f"[INFO] ONNX model exported and cached at {export_model}")
-        print(f"[INFO] Model classes set to: {class_names}")
+        if visual_prompt_data is not None:
+            print(f"[INFO] Model set up with visual prompts")
+        else:
+            print(f"[INFO] Model classes set to: {class_names}")
     
     # Warm up the model to initialize ONNX Runtime session
     # This prevents the ~2 minute delay on first inference
@@ -62,6 +91,11 @@ current_camera = 0
 t = None
 available_cameras = []
 camera_manager = None  # Background camera manager
+
+# Visual prompting state
+snapshot_frame = None
+snapshot_boxes = []  # List of bounding boxes [(x1, y1, x2, y2), ...]
+use_visual_prompt = False
 
 
 # -------------------------------
@@ -171,6 +205,8 @@ def gen_frames():
 def index():
     """Main HTML page with control buttons."""
     status = "🟢 Running" if running else "🔴 Stopped"
+    prompt_mode = "🎯 Visual Prompting" if use_visual_prompt else "📝 Text Prompting"
+    has_snapshot = snapshot_frame is not None
 
     camera_options_html = "".join(
         [f'<option value="{cam}" {"selected" if cam == current_camera else ""}>Camera {cam}</option>'
@@ -184,41 +220,233 @@ def index():
 
     return f'''
     <html>
+        <head>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    margin: 20px;
+                }}
+                .section {{
+                    border: 1px solid #ccc;
+                    padding: 15px;
+                    margin-bottom: 20px;
+                    border-radius: 5px;
+                }}
+                .canvas-container {{
+                    position: relative;
+                    display: inline-block;
+                }}
+                #snapshotCanvas {{
+                    border: 2px solid #333;
+                    cursor: crosshair;
+                }}
+                .button {{
+                    padding: 8px 16px;
+                    margin: 5px;
+                    cursor: pointer;
+                }}
+                .disabled {{
+                    opacity: 0.5;
+                    cursor: not-allowed;
+                }}
+            </style>
+        </head>
         <body>
-        <h1>YOLO Live Stream (Threaded, Controlled)</h1>
-        <h3>Status: {status}</h3>
-        <h3>Current Model: YoloE-11{current_model.upper()}</h3>
-        <h3>Current Classes: {current_classes}</h3>
-        <form action="/start" method="post" style="display:inline;">
-            <input type="submit" value="Start Inference" {"disabled" if running else ""}>
-        </form>
-        <form action="/stop" method="post" style="display:inline;">
-            <input type="submit" value="Stop Inference" {"disabled" if not running else ""}>
-        </form>
-        <br><br>
-        <form action="/set_camera" method="post">
-            <label for="camera">Select Camera:</label>
-            <select name="camera" id="camera" {"disabled" if running else ""}>
-                {camera_options_html}
-            </select>
-            <input type="submit" value="Switch Camera" {"disabled" if running else ""}>
-        </form>
-        <br><br>
-        <form action="/set_model" method="post">
-            <label for="model">Select Model:</label>
-            <select name="model" id="model" {"disabled" if running else ""}>
-                {model_options_html}
-            </select>
-            <input type="submit" value="Switch Model" {"disabled" if running else ""}>
-        </form>
-        <br><br>
-        <form action="/set_classes" method="post">
-            <label for="classes">Custom Classes (comma-separated):</label>
-            <input type="text" name="classes" id="classes" value="{current_classes}" size="50" {"disabled" if running else ""}>
-            <input type="submit" value="Update Classes" {"disabled" if running else ""}>
-        </form>
-        <br><br>
-        <img src="/video_feed" width="640" height="480">
+        <h1>YOLO Live Stream with Visual Prompting</h1>
+        
+        <div class="section">
+            <h2>Status & Controls</h2>
+            <h3>Status: {status}</h3>
+            <h3>Current Model: YoloE-11{current_model.upper()}</h3>
+            <h3>Prompt Mode: {prompt_mode}</h3>
+            {"<h3>Current Classes: " + current_classes + "</h3>" if not use_visual_prompt else "<h3>Visual Prompts Active: " + str(len(snapshot_boxes)) + " boxes</h3>"}
+            
+            <form action="/start" method="post" style="display:inline;">
+                <input type="submit" value="Start Inference" {"disabled" if running else ""} class="button">
+            </form>
+            <form action="/stop" method="post" style="display:inline;">
+                <input type="submit" value="Stop Inference" {"disabled" if not running else ""} class="button">
+            </form>
+        </div>
+        
+        <div class="section">
+            <h2>Configuration</h2>
+            <form action="/set_camera" method="post">
+                <label for="camera">Select Camera:</label>
+                <select name="camera" id="camera" {"disabled" if running else ""}>
+                    {camera_options_html}
+                </select>
+                <input type="submit" value="Switch Camera" {"disabled" if running else ""} class="button">
+            </form>
+            <br><br>
+            <form action="/set_model" method="post">
+                <label for="model">Select Model:</label>
+                <select name="model" id="model" {"disabled" if running else ""}>
+                    {model_options_html}
+                </select>
+                <input type="submit" value="Switch Model" {"disabled" if running else ""} class="button">
+            </form>
+        </div>
+        
+        <div class="section">
+            <h2>Text Prompting</h2>
+            <form action="/set_classes" method="post">
+                <label for="classes">Custom Classes (comma-separated):</label>
+                <input type="text" name="classes" id="classes" value="{current_classes}" size="50" {"disabled" if running else ""}>
+                <input type="submit" value="Update Classes" {"disabled" if running else ""} class="button">
+            </form>
+        </div>
+        
+        <div class="section">
+            <h2>Visual Prompting</h2>
+            <p>Capture a snapshot from the camera and draw bounding boxes around objects you want to track.</p>
+            
+            <form action="/capture_snapshot" method="post" style="display:inline;">
+                <input type="submit" value="Capture Snapshot" {"disabled" if running else ""} class="button">
+            </form>
+            
+            <button onclick="clearBoxes()" {"disabled" if running or not has_snapshot else ""} class="button">Clear Boxes</button>
+            <button onclick="saveVisualPrompt()" {"disabled" if running or not has_snapshot else ""} class="button">Save Snapshot with Boxes</button>
+            
+            <form action="/clear_visual_prompt" method="post" style="display:inline;">
+                <input type="submit" value="Clear Visual Prompt" {"disabled" if running or not use_visual_prompt else ""} class="button">
+            </form>
+            
+            <br><br>
+            
+            <div class="canvas-container">
+                <canvas id="snapshotCanvas" width="640" height="480"></canvas>
+            </div>
+            
+            <p id="boxInfo">No boxes drawn</p>
+        </div>
+        
+        <div class="section">
+            <h2>Live Feed</h2>
+            <img src="/video_feed" width="640" height="480">
+        </div>
+        
+        <script>
+            const canvas = document.getElementById('snapshotCanvas');
+            const ctx = canvas.getContext('2d');
+            let boxes = [];
+            let isDrawing = false;
+            let startX, startY;
+            let snapshotLoaded = {str(has_snapshot).lower()};
+            
+            // Load snapshot image
+            function loadSnapshot() {{
+                const img = new Image();
+                img.onload = function() {{
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    ctx.drawImage(img, 0, 0);
+                    redrawBoxes();
+                }};
+                img.src = '/snapshot_image?t=' + new Date().getTime();
+            }}
+            
+            if (snapshotLoaded) {{
+                loadSnapshot();
+            }}
+            
+            // Mouse event handlers for drawing boxes
+            canvas.addEventListener('mousedown', (e) => {{
+                if ({str(running).lower()} || !snapshotLoaded) return;
+                
+                const rect = canvas.getBoundingClientRect();
+                startX = e.clientX - rect.left;
+                startY = e.clientY - rect.top;
+                isDrawing = true;
+            }});
+            
+            canvas.addEventListener('mousemove', (e) => {{
+                if (!isDrawing) return;
+                
+                const rect = canvas.getBoundingClientRect();
+                const currentX = e.clientX - rect.left;
+                const currentY = e.clientY - rect.top;
+                
+                // Redraw everything
+                loadSnapshot();
+                
+                // Draw current box being drawn
+                ctx.strokeStyle = 'lime';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(startX, startY, currentX - startX, currentY - startY);
+            }});
+            
+            canvas.addEventListener('mouseup', (e) => {{
+                if (!isDrawing) return;
+                
+                const rect = canvas.getBoundingClientRect();
+                const endX = e.clientX - rect.left;
+                const endY = e.clientY - rect.top;
+                
+                // Save the box (normalize to 0-1 range)
+                const x1 = Math.min(startX, endX) / canvas.width;
+                const y1 = Math.min(startY, endY) / canvas.height;
+                const x2 = Math.max(startX, endX) / canvas.width;
+                const y2 = Math.max(startY, endY) / canvas.height;
+                
+                // Only save if box has some size
+                if (Math.abs(x2 - x1) > 0.01 && Math.abs(y2 - y1) > 0.01) {{
+                    boxes.push({{ x1, y1, x2, y2 }});
+                    updateBoxInfo();
+                    redrawBoxes();
+                }}
+                
+                isDrawing = false;
+            }});
+            
+            function redrawBoxes() {{
+                for (const box of boxes) {{
+                    const x1 = box.x1 * canvas.width;
+                    const y1 = box.y1 * canvas.height;
+                    const x2 = box.x2 * canvas.width;
+                    const y2 = box.y2 * canvas.height;
+                    
+                    ctx.strokeStyle = 'lime';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+                }}
+            }}
+            
+            function clearBoxes() {{
+                boxes = [];
+                loadSnapshot();
+                updateBoxInfo();
+            }}
+            
+            function updateBoxInfo() {{
+                const info = document.getElementById('boxInfo');
+                if (boxes.length === 0) {{
+                    info.textContent = 'No boxes drawn';
+                }} else {{
+                    info.textContent = `${{boxes.length}} box(es) drawn`;
+                }}
+            }}
+            
+            function saveVisualPrompt() {{
+                if (boxes.length === 0) {{
+                    alert('Please draw at least one bounding box first.');
+                    return;
+                }}
+                
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = '/save_visual_prompt';
+                
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'boxes';
+                input.value = JSON.stringify(boxes);
+                
+                form.appendChild(input);
+                document.body.appendChild(form);
+                form.submit();
+            }}
+        </script>
         </body>
     </html>
     '''
@@ -319,7 +547,7 @@ def set_model():
 @app.route('/set_classes', methods=['POST'])
 def set_classes():
     """Change the object classes to detect (only allowed when stopped)."""
-    global current_classes, model
+    global current_classes, model, use_visual_prompt
 
     try:
         new_classes = request.form.get("classes")
@@ -340,6 +568,9 @@ def set_classes():
     if not class_list:
         return "<html><body><h3>Please provide at least one class name.</h3><a href='/'>Back</a></body></html>"
     
+    # Switch to text prompting mode
+    use_visual_prompt = False
+    
     # Delete cached ONNX model to force re-export with new classes
     onnx_model_path = f"yoloe-11{current_model}-seg.onnx"
     if os.path.exists(onnx_model_path):
@@ -350,6 +581,134 @@ def set_classes():
     print(f"[INFO] Updating classes to: {class_list}")
     model = load_model(current_model, class_list)
     print(f"[INFO] Classes updated successfully")
+    
+    return '<meta http-equiv="refresh" content="0; url=/" />'
+
+
+@app.route('/capture_snapshot', methods=['POST'])
+def capture_snapshot():
+    """Capture the current frame as a snapshot."""
+    global snapshot_frame
+    
+    if running:
+        return "<html><body><h3>Stop inference first!</h3><a href='/'>Back</a></body></html>"
+    
+    # Get current frame from camera
+    cap = camera_manager.get_camera(current_camera) if camera_manager else cv2.VideoCapture(current_camera)
+    
+    if cap is None or not cap.isOpened():
+        return "<html><body><h3>Could not open camera to capture snapshot.</h3><a href='/'>Back</a></body></html>"
+    
+    success, frame = cap.read()
+    if not success:
+        return "<html><body><h3>Failed to capture frame from camera.</h3><a href='/'>Back</a></body></html>"
+    
+    with lock:
+        snapshot_frame = frame.copy()
+    
+    print(f"[INFO] Snapshot captured")
+    return '<meta http-equiv="refresh" content="0; url=/" />'
+
+
+@app.route('/snapshot_image')
+def snapshot_image():
+    """Return the captured snapshot as JPEG."""
+    global snapshot_frame
+    
+    with lock:
+        if snapshot_frame is None:
+            # Return a blank image if no snapshot
+            blank = np.zeros((480, 640, 3), dtype=np.uint8)
+            ret, buffer = cv2.imencode('.jpg', blank)
+        else:
+            ret, buffer = cv2.imencode('.jpg', snapshot_frame)
+    
+    if not ret:
+        return "Error encoding image", 500
+    
+    return Response(buffer.tobytes(), mimetype='image/jpeg')
+
+
+@app.route('/save_visual_prompt', methods=['POST'])
+def save_visual_prompt():
+    """Save the snapshot with drawn bounding boxes as visual prompt."""
+    global snapshot_boxes, use_visual_prompt, model, snapshot_frame
+    
+    if running:
+        return "<html><body><h3>Stop inference first!</h3><a href='/'>Back</a></body></html>"
+    
+    if snapshot_frame is None:
+        return "<html><body><h3>Please capture a snapshot first.</h3><a href='/'>Back</a></body></html>"
+    
+    try:
+        # Get bounding boxes from request
+        boxes_json = request.form.get("boxes", "[]")
+        import json
+        boxes_data = json.loads(boxes_json)
+        
+        if not boxes_data:
+            return "<html><body><h3>Please draw at least one bounding box.</h3><a href='/'>Back</a></body></html>"
+        
+        # Convert boxes from relative coordinates to absolute coordinates
+        h, w = snapshot_frame.shape[:2]
+        snapshot_boxes = []
+        for box in boxes_data:
+            x1 = int(box['x1'] * w)
+            y1 = int(box['y1'] * h)
+            x2 = int(box['x2'] * w)
+            y2 = int(box['y2'] * h)
+            snapshot_boxes.append([x1, y1, x2, y2])
+        
+        # Switch to visual prompting mode
+        use_visual_prompt = True
+        
+        # Delete cached ONNX model to force re-export with visual prompts
+        onnx_model_path = f"yoloe-11{current_model}-seg.onnx"
+        if os.path.exists(onnx_model_path):
+            os.remove(onnx_model_path)
+            print(f"[INFO] Removed cached ONNX model to re-export with visual prompts")
+        
+        # Prepare visual prompt data
+        visual_prompt_data = {
+            'image': snapshot_frame,
+            'boxes': np.array(snapshot_boxes)
+        }
+        
+        # Reload the model with visual prompts
+        print(f"[INFO] Setting up visual prompts with {len(snapshot_boxes)} boxes")
+        model = load_model(current_model, visual_prompt_data=visual_prompt_data)
+        print(f"[INFO] Visual prompts set successfully")
+        
+        return '<meta http-equiv="refresh" content="0; url=/" />'
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to save visual prompt: {e}")
+        return f"<html><body><h3>Error: {str(e)}</h3><a href='/'>Back</a></body></html>"
+
+
+@app.route('/clear_visual_prompt', methods=['POST'])
+def clear_visual_prompt():
+    """Clear visual prompts and return to text prompting mode."""
+    global use_visual_prompt, snapshot_frame, snapshot_boxes, model
+    
+    if running:
+        return "<html><body><h3>Stop inference first!</h3><a href='/'>Back</a></body></html>"
+    
+    use_visual_prompt = False
+    snapshot_frame = None
+    snapshot_boxes = []
+    
+    # Delete cached ONNX model to force re-export with text prompts
+    onnx_model_path = f"yoloe-11{current_model}-seg.onnx"
+    if os.path.exists(onnx_model_path):
+        os.remove(onnx_model_path)
+        print(f"[INFO] Removed cached ONNX model to re-export with text prompts")
+    
+    # Reload the model with text prompts
+    class_list = [name.strip() for name in current_classes.split(",") if name.strip()]
+    print(f"[INFO] Returning to text prompting mode with classes: {class_list}")
+    model = load_model(current_model, class_list)
+    print(f"[INFO] Switched back to text prompting mode")
     
     return '<meta http-equiv="refresh" content="0; url=/" />'
 

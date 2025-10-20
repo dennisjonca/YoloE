@@ -108,8 +108,8 @@ def load_model(model_size, class_names=None, visual_prompt_data=None):
         # For visual prompting, warm up with predict() and YOLOEVPSegPredictor
         from ultralytics.models.yolo.yoloe import YOLOEVPSegPredictor
         dummy_visual_prompts = {
-            'bboxes': [np.array([[10, 10, 50, 50]], dtype=np.float32)],
-            'cls': [np.array([0], dtype=np.int32)]
+            'bboxes': [[10, 10, 50, 50]],  # List of boxes
+            'cls': [0]  # List of class IDs (integers)
         }
         _ = list(loaded_model.predict(source=dummy_frame, visual_prompts=dummy_visual_prompts, 
                                       predictor=YOLOEVPSegPredictor, conf=0.2, show=False, verbose=False))
@@ -851,18 +851,22 @@ def save_visual_prompt():
         print(f"[DEBUG] Snapshot boxes (absolute coords): {snapshot_boxes}")
         
         # Create visual prompt dictionary in the format expected by predict()
-        # According to official API:
+        # According to implementation inspection:
         # visual_prompts = dict(
-        #     bboxes=[np.array([[x1, y1, x2, y2], ...])],  # List of arrays, one per image
-        #     cls=[np.array([0, 1, ...])]  # List of class IDs, one per image
+        #     bboxes=[[x1, y1, x2, y2], ...],  # List of boxes
+        #     cls=[0, 0, ...]  # List of class IDs (integers 0-based)
         # )
-        boxes_array = np.array(snapshot_boxes, dtype=np.float32)
-        # Assign class ID 0 to all boxes (generic object)
-        cls_array = np.zeros(len(snapshot_boxes), dtype=np.int32)
+        # The num_cls is calculated from len(set(cls)), so integers are expected
+        
+        # Convert to list of lists for bboxes (API expects list)
+        bboxes_list = [box for box in snapshot_boxes]  # List of [x1, y1, x2, y2]
+        
+        # Create list of class IDs (all 0 for generic detection)
+        cls_list = [0] * len(snapshot_boxes)
         
         visual_prompt_dict = {
-            'bboxes': [boxes_array],  # List containing one array for single image
-            'cls': [cls_array]  # List containing one array for single image
+            'bboxes': bboxes_list,  # List of boxes
+            'cls': cls_list  # List of class IDs (integers)
         }
         
         print(f"[INFO] Created visual prompt dict with {len(snapshot_boxes)} boxes")

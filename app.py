@@ -3,6 +3,7 @@ from ultralytics import YOLOE
 import cv2, threading, time, platform, os
 import numpy as np
 import torch
+import traceback
 from camera_manager import CameraManager
 
 app = Flask(__name__)
@@ -39,13 +40,20 @@ def get_hardware_info():
     return info
 
 def load_model(model_size, class_names=None, visual_prompt_data=None):
-    """Load YOLO model with the specified size (s, m, or l) and class names or visual prompts."""
+    """Load YOLO model with the specified size (s, m, or l) and class names or visual prompts.
+    
+    Returns:
+        tuple: (model, success) where success is True if visual prompts were set successfully,
+               or True if text prompts were used (no visual prompts requested)
+    """
     if class_names is None:
         class_names = ["person", "plant"]
     
     # Define the ONNX model path
     onnx_model_path = f"yoloe-11{model_size}-seg.onnx"
     pt_model_path = f"yoloe-11{model_size}-seg.pt"
+    
+    visual_prompt_success = True  # Track if visual prompts were set successfully
     
     # Check if ONNX model already exists to avoid re-exporting
     if os.path.exists(onnx_model_path):
@@ -82,9 +90,12 @@ def load_model(model_size, class_names=None, visual_prompt_data=None):
                     # Fallback: use generic class name
                     loaded_model.set_classes(["object"], loaded_model.get_text_pe(["object"]))
             except Exception as e:
-                print(f"[ERROR] Failed to set visual prompts: {e}")
+                error_msg = str(e) if str(e) else "Unknown error"
+                print(f"[ERROR] Failed to set visual prompts: {error_msg}")
+                print(f"[ERROR] Traceback: {traceback.format_exc()}")
                 print(f"[INFO] Falling back to generic object detection")
                 loaded_model.set_classes(["object"], loaded_model.get_text_pe(["object"]))
+                visual_prompt_success = False
         else:
             # Text prompting mode: use class names
             loaded_model.set_classes(class_names, loaded_model.get_text_pe(class_names))
@@ -94,7 +105,10 @@ def load_model(model_size, class_names=None, visual_prompt_data=None):
         loaded_model = YOLOE(export_model)
         print(f"[INFO] ONNX model exported and cached at {export_model}")
         if visual_prompt_data is not None:
-            print(f"[INFO] Model set up with visual prompts")
+            if visual_prompt_success:
+                print(f"[INFO] Model set up with visual prompts")
+            else:
+                print(f"[WARN] Model set up with fallback (visual prompts failed)")
         else:
             print(f"[INFO] Model classes set to: {class_names}")
     
@@ -105,10 +119,10 @@ def load_model(model_size, class_names=None, visual_prompt_data=None):
     _ = list(loaded_model.track(source=dummy_frame, conf=0.2, iou=0.4, show=False, persist=True, verbose=False))
     print(f"[INFO] Model {model_size} warm-up complete - ready for inference")
     
-    return loaded_model
+    return loaded_model, visual_prompt_success
 
 # Load the default model
-model = load_model(current_model, current_classes.split(", "))
+model, _ = load_model(current_model, current_classes.split(", "))
 
 # -------------------------------
 # ⚙️ Shared State
@@ -637,7 +651,7 @@ def set_model():
     
     # Load the new model with current classes
     print(f"[INFO] Switching to model: YoloE-11{current_model.upper()}")
-    model = load_model(current_model, current_classes.split(", "))
+    model, _ = load_model(current_model, current_classes.split(", "))
     print(f"[INFO] Model changed to YoloE-11{current_model.upper()}")
     
     return '<meta http-equiv="refresh" content="0; url=/" />'
@@ -706,7 +720,7 @@ def set_classes():
     
     # Reload the model with new classes
     print(f"[INFO] Updating classes to: {class_list}")
-    model = load_model(current_model, class_list)
+    model, _ = load_model(current_model, class_list)
     print(f"[INFO] Classes updated successfully")
     
     return '<meta http-equiv="refresh" content="0; url=/" />'
@@ -803,8 +817,12 @@ def save_visual_prompt():
         
         # Reload the model with visual prompts
         print(f"[INFO] Setting up visual prompts with {len(snapshot_boxes)} boxes")
-        model = load_model(current_model, visual_prompt_data=visual_prompt_data)
-        print(f"[INFO] Visual prompts set successfully")
+        model, success = load_model(current_model, visual_prompt_data=visual_prompt_data)
+        
+        if success:
+            print(f"[INFO] Visual prompts set successfully")
+        else:
+            print(f"[WARN] Visual prompts could not be set - using fallback generic detection")
         
         return '<meta http-equiv="refresh" content="0; url=/" />'
         
@@ -834,7 +852,7 @@ def clear_visual_prompt():
     # Reload the model with text prompts
     class_list = [name.strip() for name in current_classes.split(",") if name.strip()]
     print(f"[INFO] Returning to text prompting mode with classes: {class_list}")
-    model = load_model(current_model, class_list)
+    model, _ = load_model(current_model, class_list)
     print(f"[INFO] Switched back to text prompting mode")
     
     return '<meta http-equiv="refresh" content="0; url=/" />'

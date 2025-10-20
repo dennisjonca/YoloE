@@ -12,6 +12,7 @@ The application now supports visual prompting, allowing you to track objects by 
 - **Interactive Canvas**: Real-time visual feedback while drawing boxes
 - **Dual Mode Support**: Switch between text prompting and visual prompting seamlessly
 - **Multiple Objects**: Draw multiple boxes to track different objects or instances
+- **Resolution Independent**: Works with cameras of any resolution (snapshots are automatically resized to model input size)
 
 ### Custom Class Prompts (Text Prompting)
 The application allows users to customize which objects the YOLO model should detect:

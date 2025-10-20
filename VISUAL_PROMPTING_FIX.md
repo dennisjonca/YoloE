@@ -94,8 +94,8 @@ visual_prompt_dict = None  # Dict with 'bboxes' and 'cls' for predict() API
 Format:
 ```python
 visual_prompt_dict = {
-    'bboxes': [np.array([[x1, y1, x2, y2], ...], dtype=np.float32)],
-    'cls': [np.array([0, 1, ...], dtype=np.int32)]
+    'bboxes': [[x1, y1, x2, y2], ...],  # List of lists
+    'cls': [0, 1, ...]  # List of integers (0-based class IDs)
 }
 ```
 
@@ -156,12 +156,13 @@ for box in boxes_data:
     snapshot_boxes.append([x1, y1, x2, y2])
 
 # Create visual prompt dictionary (official API format)
-boxes_array = np.array(snapshot_boxes, dtype=np.float32)
-cls_array = np.zeros(len(snapshot_boxes), dtype=np.int32)  # All boxes get class ID 0
+# Note: For single image, use flat lists (not nested arrays)
+bboxes_list = [box for box in snapshot_boxes]  # List of [x1,y1,x2,y2]
+cls_list = [0] * len(snapshot_boxes)  # List of integers (all 0 for generic)
 
 visual_prompt_dict = {
-    'bboxes': [boxes_array],
-    'cls': [cls_array]
+    'bboxes': bboxes_list,
+    'cls': cls_list
 }
 ```
 
@@ -190,11 +191,14 @@ The official API expects boxes in absolute pixel coordinates because:
 - ONNX models have their inputs/outputs fixed at export time
 - PyTorch models allow dynamic inputs, including the visual prompts parameter
 
-### Why Assign Class ID 0 to All Boxes?
+### Why Use Integer Class IDs?
 
-- The API requires class IDs for each box
-- Since we're doing generic "object tracking", all boxes get the same class ID (0)
-- In the future, this could be extended to support multiple object classes
+- Despite the documentation showing strings like `cls=["person"]`, the implementation expects integers
+- The `get_visuals()` method tries to convert cls to `torch.tensor(category, dtype=torch.int)`
+- Strings cause a "too many dimensions 'str'" error
+- All boxes get class ID 0 for generic object detection
+- The model internally maps these to `object0`, `object1`, etc.
+- In the future, this could be extended to support multiple object classes with different IDs
 
 ## Testing
 

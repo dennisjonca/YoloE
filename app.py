@@ -269,8 +269,8 @@ def gen_frames():
 @app.route('/')
 def index():
     """Main HTML page with control buttons."""
-    status = "🟢 Running" if running else "🔴 Stopped"
-    prompt_mode = "🎯 Visual Prompting" if use_visual_prompt else "📝 Text Prompting"
+    status = "Running" if running else "Stopped"
+    prompt_mode = "Visual Prompting" if use_visual_prompt else "Text Prompting"
     has_snapshot = snapshot_frame is not None
     
     # Get hardware information
@@ -321,7 +321,7 @@ def index():
             </style>
         </head>
         <body>
-        <h1>YOLO Live Stream with Visual Prompting</h1>
+        <h1>YOLO Stream with Live Inference</h1>
         
         <div class="section">
             <h2>Status & Controls</h2>

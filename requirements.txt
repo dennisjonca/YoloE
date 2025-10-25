@@ -1,0 +1,13 @@
+# Requirements for YoloE
+# Core dependencies
+flask
+opencv-python
+ultralytics
+torch
+numpy
+
+# Heatmap generation dependencies
+grad-cam
+matplotlib
+Pillow
+tqdm

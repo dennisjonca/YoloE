@@ -36,3 +36,5 @@ env/
 *.pt
 *.onnx
 runs/
+heatmaps/
+result/

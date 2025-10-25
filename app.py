@@ -1,10 +1,11 @@
-from flask import Flask, Response, request
+from flask import Flask, Response, request, send_file
 from ultralytics import YOLOE
 import cv2, threading, time, platform, os
 import numpy as np
 import torch
 import traceback
 from camera_manager import CameraManager
+from heatmap_generator import YoloEHeatmapGenerator, get_default_params
 
 app = Flask(__name__)
 
@@ -140,6 +141,9 @@ snapshot_frame = None
 snapshot_boxes = []  # List of bounding boxes [(x1, y1, x2, y2), ...]
 use_visual_prompt = False
 visual_prompt_dict = None  # Dict with 'bboxes' and 'cls' for predict() API
+
+# Heatmap state
+last_heatmap_path = None  # Path to the last generated heatmap
 
 # Performance monitoring
 fps_counter = 0
@@ -447,8 +451,8 @@ def index():
         </div>
         
         <div class="section">
-            <h2>Visual Prompting</h2>
-            <p>Capture a snapshot from the camera and draw bounding boxes around objects you want to track.</p>
+            <h2>Visual Prompting & Heatmap Generation</h2>
+            <p>Capture a snapshot from the camera and either draw bounding boxes for tracking or generate a heatmap to visualize what the model "sees".</p>
             
             <form action="/capture_snapshot" method="post" style="display:inline;">
                 <input type="submit" value="Capture Snapshot" {"disabled" if running else ""} class="button">
@@ -459,6 +463,10 @@ def index():
             
             <form action="/clear_visual_prompt" method="post" style="display:inline;">
                 <input type="submit" value="Clear Visual Prompt" {"disabled" if running or not use_visual_prompt else ""} class="button">
+            </form>
+            
+            <form action="/generate_heatmap" method="post" style="display:inline;">
+                <input type="submit" value="Generate Heatmap" {"disabled" if running or not has_snapshot else ""} class="button" title="Generate a heatmap showing what the model focuses on">
             </form>
             
             <br><br>
@@ -931,6 +939,83 @@ def clear_visual_prompt():
     print(f"[INFO] Switched back to text prompting mode")
     
     return '<meta http-equiv="refresh" content="0; url=/" />'
+
+
+@app.route('/generate_heatmap', methods=['POST'])
+def generate_heatmap():
+    """Generate a GradCAM heatmap from the current snapshot."""
+    global snapshot_frame, last_heatmap_path
+    
+    if running:
+        return "<html><body><h3>Stop inference first!</h3><a href='/'>Back</a></body></html>"
+    
+    if snapshot_frame is None:
+        return "<html><body><h3>Please capture a snapshot first.</h3><a href='/'>Back</a></body></html>"
+    
+    try:
+        # Create heatmaps directory if it doesn't exist
+        os.makedirs('heatmaps', exist_ok=True)
+        
+        # Generate timestamp for unique filename
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        output_path = f'heatmaps/heatmap_{timestamp}.jpg'
+        
+        # Get model weight path
+        weight_path = f"yoloe-11{current_model}-seg.pt"
+        
+        if not os.path.exists(weight_path):
+            return f"<html><body><h3>Model file not found: {weight_path}</h3><a href='/'>Back</a></body></html>"
+        
+        # Get hardware info for device selection
+        hw_info = get_hardware_info()
+        device = 'cuda:0' if hw_info['cuda_available'] else 'cpu'
+        
+        print(f"[INFO] Generating heatmap using device: {device}")
+        print(f"[INFO] Model: {weight_path}")
+        
+        # Get default heatmap parameters
+        params = get_default_params()
+        params['device'] = device
+        params['show_box'] = True  # Show boxes by default
+        
+        # Create heatmap generator
+        heatmap_gen = YoloEHeatmapGenerator(weight_path, **params)
+        
+        # Generate heatmap
+        success = heatmap_gen.generate(snapshot_frame, output_path)
+        
+        if success:
+            last_heatmap_path = output_path
+            print(f"[INFO] Heatmap generated successfully: {output_path}")
+            return f'''
+                <html>
+                <body>
+                    <h3>Heatmap Generated Successfully!</h3>
+                    <p>Saved to: {output_path}</p>
+                    <img src="/view_heatmap?path={output_path}" style="max-width: 800px;">
+                    <br><br>
+                    <a href="/">Back to Main Page</a>
+                </body>
+                </html>
+            '''
+        else:
+            return "<html><body><h3>Failed to generate heatmap. Check console for errors.</h3><a href='/'>Back</a></body></html>"
+            
+    except Exception as e:
+        print(f"[ERROR] Failed to generate heatmap: {e}")
+        print(f"[ERROR] Traceback: {traceback.format_exc()}")
+        return f"<html><body><h3>Error: {str(e)}</h3><a href='/'>Back</a></body></html>"
+
+
+@app.route('/view_heatmap')
+def view_heatmap():
+    """View a generated heatmap image."""
+    path = request.args.get('path', '')
+    
+    if not path or not os.path.exists(path):
+        return "Heatmap not found", 404
+    
+    return send_file(path, mimetype='image/jpeg')
 
 
 # -------------------------------

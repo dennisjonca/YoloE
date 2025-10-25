@@ -1004,7 +1004,8 @@ def generate_heatmap():
     except Exception as e:
         print(f"[ERROR] Failed to generate heatmap: {e}")
         print(f"[ERROR] Traceback: {traceback.format_exc()}")
-        return f"<html><body><h3>Error: {str(e)}</h3><a href='/'>Back</a></body></html>"
+        # Don't expose internal error details to user
+        return "<html><body><h3>Failed to generate heatmap. Check server logs for details.</h3><a href='/'>Back</a></body></html>"
 
 
 @app.route('/view_heatmap')
@@ -1012,10 +1013,30 @@ def view_heatmap():
     """View a generated heatmap image."""
     path = request.args.get('path', '')
     
-    if not path or not os.path.exists(path):
+    # Security: Validate path is within heatmaps directory
+    if not path:
         return "Heatmap not found", 404
     
-    return send_file(path, mimetype='image/jpeg')
+    # Normalize and validate path
+    try:
+        # Get absolute paths
+        heatmaps_dir = os.path.abspath('heatmaps')
+        requested_path = os.path.abspath(path)
+        
+        # Ensure the requested path is within heatmaps directory
+        if not requested_path.startswith(heatmaps_dir):
+            print(f"[SECURITY] Path traversal attempt blocked: {path}")
+            return "Access denied", 403
+        
+        # Check if file exists
+        if not os.path.exists(requested_path) or not os.path.isfile(requested_path):
+            return "Heatmap not found", 404
+        
+        return send_file(requested_path, mimetype='image/jpeg')
+        
+    except Exception as e:
+        print(f"[ERROR] Error serving heatmap: {e}")
+        return "Error loading heatmap", 500
 
 
 # -------------------------------

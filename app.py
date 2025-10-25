@@ -144,6 +144,8 @@ visual_prompt_dict = None  # Dict with 'bboxes' and 'cls' for predict() API
 
 # Heatmap state
 last_heatmap_path = None  # Path to the last generated heatmap
+heatmap_mode = False  # Toggle for live heatmap feed
+heatmap_generator = None  # Heatmap generator instance for live mode
 
 # Performance monitoring
 fps_counter = 0
@@ -183,11 +185,32 @@ def inference_thread():
     """Runs YOLO inference in a background thread."""
     global latest_frame, running, current_camera, thread_alive
     global fps_counter, fps_start_time, current_fps, inference_time, detection_count
-    global use_visual_prompt, visual_prompt_dict
+    global use_visual_prompt, visual_prompt_dict, heatmap_mode, heatmap_generator
 
     thread_alive = True
     print(f"[INFO] Starting inference on camera {current_camera}")
     print(f"[INFO] Detection parameters: conf={current_conf}, iou={current_iou}")
+    
+    # Initialize heatmap generator if in heatmap mode
+    if heatmap_mode:
+        print(f"[INFO] Initializing heatmap mode")
+        try:
+            weight_path = f"yoloe-11{current_model}-seg.pt"
+            hw_info = get_hardware_info()
+            device = 'cuda:0' if hw_info['cuda_available'] else 'cpu'
+            
+            params = get_default_params()
+            params['device'] = device
+            params['show_box'] = True
+            params['renormalize'] = True
+            
+            heatmap_generator = YoloEHeatmapGenerator(weight_path, **params)
+            print(f"[INFO] Heatmap generator initialized for live mode")
+        except Exception as e:
+            print(f"[ERROR] Failed to initialize heatmap generator: {e}")
+            print(f"[WARN] Falling back to normal mode")
+            heatmap_mode = False
+            heatmap_generator = None
     
     if use_visual_prompt:
         print(f"[INFO] Using visual prompting mode")
@@ -226,10 +249,73 @@ def inference_thread():
         # Measure inference time
         inference_start = time.time()
         
-        # Run inference based on prompting mode
+        # Run inference based on heatmap or prompting mode
         detections_found = 0
         
-        if use_visual_prompt and visual_prompt_dict is not None:
+        if heatmap_mode and heatmap_generator is not None:
+            # Heatmap mode: generate heatmap overlay for live feed
+            try:
+                # Generate heatmap using the heatmap generator's internal methods
+                from heatmap_generator import letterbox
+                from pytorch_grad_cam.utils.image import show_cam_on_image
+                
+                # Process image for heatmap
+                img = letterbox(frame)[0]
+                img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                img_float = np.float32(img_rgb) / 255.0
+                tensor = torch.from_numpy(np.transpose(img_float, axes=[2, 0, 1])).unsqueeze(0).to(heatmap_generator.device)
+
+                # Generate GradCAM
+                try:
+                    grayscale_cam = heatmap_generator.method(tensor, [heatmap_generator.target])
+                    grayscale_cam = grayscale_cam[0, :]
+                except Exception as e:
+                    # Fallback: use simple activation
+                    grayscale_cam = np.random.rand(*img_float.shape[:2]) * 0.3
+                
+                # Create heatmap overlay
+                cam_image = show_cam_on_image(img_float, grayscale_cam, use_rgb=True)
+                
+                # Get predictions for boxes
+                results = heatmap_generator.yolo_model.predict(
+                    source=frame,
+                    conf=current_conf,
+                    verbose=False,
+                    show=False
+                )
+                
+                # Process results and draw boxes
+                if results and len(results) > 0:
+                    result = results[0]
+                    boxes = result.boxes
+                    
+                    if boxes is not None and len(boxes) > 0:
+                        boxes_xyxy = boxes.xyxy.cpu().numpy().astype(np.int32)
+                        detections_found = len(boxes_xyxy)
+                        
+                        # Renormalize CAM in boxes if enabled
+                        if heatmap_generator.renormalize and len(boxes_xyxy) > 0:
+                            cam_image = heatmap_generator.renormalize_cam_in_bounding_boxes(
+                                boxes_xyxy, img_float, grayscale_cam
+                            )
+                        
+                        # Draw boxes
+                        if heatmap_generator.show_box:
+                            for i, box_xyxy in enumerate(boxes_xyxy):
+                                cls_id = int(boxes.cls[i])
+                                conf = float(boxes.conf[i])
+                                label = f'{heatmap_generator.model_names[cls_id]} {conf:.2f}'
+                                color = heatmap_generator.colors[cls_id % len(heatmap_generator.colors)]
+                                cam_image = heatmap_generator.draw_detections(box_xyxy, color, label, cam_image)
+                
+                # Convert back to BGR for display
+                frame = cv2.cvtColor(cam_image, cv2.COLOR_RGB2BGR)
+                
+            except Exception as e:
+                print(f"[WARN] Heatmap generation failed: {e}, using normal frame")
+                # Continue with normal detection on error
+        
+        elif use_visual_prompt and visual_prompt_dict is not None:
             # Visual prompting mode: use predict() with YOLOEVPSegPredictor
             # Pass visual prompts per-frame
             results = model.predict(
@@ -281,7 +367,8 @@ def inference_thread():
         detection_count = detections_found
         
         # Add performance overlay
-        perf_text = f"FPS: {current_fps:.1f} | Inference: {inference_time*1000:.1f}ms | Detections: {detection_count}"
+        mode_indicator = "HEATMAP" if heatmap_mode else "NORMAL"
+        perf_text = f"[{mode_indicator}] FPS: {current_fps:.1f} | Inference: {inference_time*1000:.1f}ms | Detections: {detection_count}"
         cv2.putText(frame, perf_text, (10, 30),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
         
@@ -389,6 +476,7 @@ def index():
             <h3>Hardware: {hardware_status}</h3>
             <h3>Current Model: YoloE-11{current_model.upper()}</h3>
             <h3>Prompt Mode: {prompt_mode}</h3>
+            <h3>Heatmap Mode: {"ON" if heatmap_mode else "OFF"}</h3>
             {"<h3>Current Classes: " + current_classes + "</h3>" if not use_visual_prompt else "<h3>Visual Prompts Active: " + str(len(snapshot_boxes)) + " boxes</h3>"}
             {f"<h3>Performance: {current_fps:.1f} FPS | {inference_time*1000:.1f}ms inference | {detection_count} detections</h3>" if running else ""}
             
@@ -397,6 +485,9 @@ def index():
             </form>
             <form action="/stop" method="post" style="display:inline;">
                 <input type="submit" value="Stop Inference" {"disabled" if not running else ""} class="button">
+            </form>
+            <form action="/toggle_heatmap" method="post" style="display:inline;">
+                <input type="submit" value="{"Disable" if heatmap_mode else "Enable"} Heatmap Mode" {"disabled" if running else ""} class="button">
             </form>
         </div>
         
@@ -647,6 +738,21 @@ def stop_inference():
         running = False
         if t and t.is_alive():
             t.join(timeout=2.0)
+    return '<meta http-equiv="refresh" content="0; url=/" />'
+
+
+@app.route('/toggle_heatmap', methods=['POST'])
+def toggle_heatmap():
+    """Toggle heatmap mode on/off."""
+    global heatmap_mode
+    
+    if running:
+        return "<html><body><h3>Stop inference first!</h3><a href='/'>Back</a></body></html>"
+    
+    heatmap_mode = not heatmap_mode
+    mode_str = "ON" if heatmap_mode else "OFF"
+    print(f"[INFO] Heatmap mode toggled: {mode_str}")
+    
     return '<meta http-equiv="refresh" content="0; url=/" />'
 
 

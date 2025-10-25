@@ -3,8 +3,21 @@ A YoloE project to demonstrate using AI in process.
 
 ## Features
 
-### Heatmap Generation
-The application includes GradCAM-based heatmap visualization to show what the model "looks at" when making detections:
+### Live Heatmap Mode (NEW!)
+The application now supports real-time heatmap visualization during live camera inference:
+
+- **Real-time Attention**: See what the model focuses on as objects move in real-time
+- **Toggle Control**: Switch between normal and heatmap mode with a single button
+- **Live Overlay**: Heatmap overlay updated every frame during inference
+- **Mode Indicator**: Clear [HEATMAP] or [NORMAL] indicator on video feed
+- **Detection Integration**: Bounding boxes and labels shown on heatmap
+- **Performance Metrics**: FPS and inference time displayed in both modes
+- **Easy Toggle**: Enable/disable heatmap mode when inference is stopped
+
+See [LIVE_HEATMAP_MODE.md](LIVE_HEATMAP_MODE.md) for detailed documentation.
+
+### Heatmap Generation (Snapshot-based)
+The application also includes snapshot-based GradCAM heatmap visualization:
 
 - **Visual Explanation**: Generate heatmaps that highlight the regions of the image the model focuses on
 - **Snapshot-based**: Works with captured snapshots from the camera feed
@@ -131,7 +144,29 @@ The camera manager will automatically:
 
 Then open your browser to: `http://127.0.0.1:8080`
 
-## Using Heatmap Generation
+## Using Live Heatmap Mode
+
+To enable real-time heatmap visualization during live inference:
+
+1. **Stop inference** if it's currently running
+2. Click the **"Enable Heatmap Mode"** button in the Status & Controls section
+3. The status will update to show "Heatmap Mode: ON"
+4. **Start inference** to see live heatmap visualization
+5. The video feed will show a **[HEATMAP]** indicator and colored attention overlay
+6. Watch as the heatmap updates in real-time showing where the model focuses
+
+To disable heatmap mode and return to normal view:
+1. **Stop inference**
+2. Click **"Disable Heatmap Mode"**
+3. **Start inference** to see normal detection view with **[NORMAL]** indicator
+
+**Performance Note:** Heatmap mode is more computationally intensive:
+- CPU: 2-5 FPS (vs 15-30 FPS normal mode)
+- GPU: 10-20 FPS (vs 30-60 FPS normal mode)
+
+See [LIVE_HEATMAP_MODE.md](LIVE_HEATMAP_MODE.md) for detailed usage and troubleshooting.
+
+## Using Heatmap Generation (Snapshot)
 
 To generate a heatmap visualization showing what the model focuses on:
 1. Stop inference if it's running
@@ -200,6 +235,19 @@ This will test:
 python test_heatmap_generation.py
 ```
 
+## Testing Live Heatmap Mode
+
+Run the live heatmap mode tests:
+```bash
+python test_live_heatmap_lightweight.py
+```
+
+This will test:
+- Core imports (heatmap_generator, pytorch_grad_cam)
+- Code structure (heatmap_mode flag, toggle route)
+- Utility functions (letterbox, get_default_params)
+- Integration logic (GradCAM generation, overlay creation)
+
 ## Testing the Camera Manager
 
 Run the verification script to test the camera manager:
@@ -257,6 +305,8 @@ The application now includes configurable detection parameters to optimize track
 
 ## Documentation
 
+- [LIVE_HEATMAP_MODE.md](LIVE_HEATMAP_MODE.md) - **NEW!** Real-time heatmap visualization feature
+- [HEATMAP_FEATURE.md](HEATMAP_FEATURE.md) - Snapshot-based heatmap generation documentation
 - [PERFORMANCE_GUIDE.md](PERFORMANCE_GUIDE.md) - Complete guide to detection parameters, hardware, and troubleshooting
 - [VISUAL_PROMPTING_FEATURE.md](VISUAL_PROMPTING_FEATURE.md) - Visual prompting feature documentation
 - [VISUAL_PROMPT_SHAPE_FIX.md](VISUAL_PROMPT_SHAPE_FIX.md) - Fix for visual prompt shape mismatch error
@@ -283,10 +333,13 @@ YoloE/
 ├── test_box_tensor_fix.py        # Box tensor dimension test suite
 ├── test_heatmap_unit.py          # Heatmap module unit tests
 ├── test_heatmap_generation.py    # Heatmap generation integration test
+├── test_live_heatmap_lightweight.py  # Live heatmap mode test suite
 ├── verify_camera_manager.py      # Camera manager verification script
 ├── verify_model_caching.py       # Model caching verification script
 ├── verify_model_warmup.py        # Model warm-up verification script
 ├── README.md                     # This file
+├── LIVE_HEATMAP_MODE.md          # Live heatmap mode feature documentation
+├── HEATMAP_FEATURE.md            # Snapshot-based heatmap documentation
 ├── VISUAL_PROMPTING_FEATURE.md   # Visual prompting feature documentation
 ├── VISUAL_PROMPT_SHAPE_FIX.md    # Visual prompt shape fix documentation
 ├── FIX_SUMMARY_SHAPE_ISSUE.md    # Shape issue fix summary

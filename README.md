@@ -3,6 +3,16 @@ A YoloE project to demonstrate using AI in process.
 
 ## Features
 
+### Heatmap Generation
+The application includes GradCAM-based heatmap visualization to show what the model "looks at" when making detections:
+
+- **Visual Explanation**: Generate heatmaps that highlight the regions of the image the model focuses on
+- **Snapshot-based**: Works with captured snapshots from the camera feed
+- **Multiple Methods**: Supports various GradCAM methods (HiResCAM, GradCAM, XGradCAM, etc.)
+- **Detection Overlay**: Optional bounding box overlay showing detected objects
+- **Save Results**: Heatmaps are saved to the `heatmaps/` directory with timestamps
+- **Easy to Use**: Single button click to generate heatmaps from any captured snapshot
+
 ### Visual Prompting
 The application now supports visual prompting, allowing you to track objects by example:
 
@@ -77,7 +87,10 @@ The `CameraManager` runs in a separate daemon thread and handles:
 
 ```bash
 # Install dependencies
-pip install flask opencv-python ultralytics
+pip install -r requirements.txt
+
+# Or install individually:
+pip install flask opencv-python ultralytics grad-cam matplotlib Pillow tqdm
 
 # Note: You'll also need a YOLO model file (e.g., yoloe-11s-seg.pt)
 ```
@@ -118,6 +131,21 @@ The camera manager will automatically:
 
 Then open your browser to: `http://127.0.0.1:8080`
 
+## Using Heatmap Generation
+
+To generate a heatmap visualization showing what the model focuses on:
+1. Stop inference if it's running
+2. Click "Capture Snapshot" to take a photo from the camera
+3. Click "Generate Heatmap" to create a GradCAM visualization
+4. The heatmap will be displayed and saved to the `heatmaps/` directory with a timestamp
+5. Heatmaps show highlighted regions where the model pays attention when making detections
+
+**What heatmaps show:**
+- Bright/warm colors (red, yellow) indicate areas the model focuses on most
+- Dark/cool colors indicate areas the model ignores
+- Optional bounding boxes show detected objects
+- Helps understand and debug model behavior
+
 ## Using Visual Prompting
 
 To track objects by visual example:
@@ -154,6 +182,23 @@ python test_custom_classes.py
 ```
 
 This verifies that the custom classes functionality is properly implemented.
+
+## Testing Heatmap Generation
+
+Run the heatmap unit tests to verify the module:
+```bash
+python test_heatmap_unit.py
+```
+
+This will test:
+- Module imports and dependencies
+- Default parameters configuration
+- App integration points
+
+**Note**: To test actual heatmap generation, you need a model file (e.g., `yoloe-11s-seg.pt`). The heatmap generation test can be run with:
+```bash
+python test_heatmap_generation.py
+```
 
 ## Testing the Camera Manager
 
@@ -229,11 +274,15 @@ The application now includes configurable detection parameters to optimize track
 YoloE/
 ├── app.py                        # Main Flask application with visual prompting
 ├── camera_manager.py             # Background camera manager
+├── heatmap_generator.py          # GradCAM heatmap generation module
+├── requirements.txt              # Python dependencies
 ├── test_custom_classes.py        # Custom classes test suite
 ├── test_tracker_reset.py         # Tracker reset test suite
 ├── test_visual_prompting.py      # Visual prompting test suite
 ├── test_visual_prompt_resize.py  # Visual prompt resize test suite
 ├── test_box_tensor_fix.py        # Box tensor dimension test suite
+├── test_heatmap_unit.py          # Heatmap module unit tests
+├── test_heatmap_generation.py    # Heatmap generation integration test
 ├── verify_camera_manager.py      # Camera manager verification script
 ├── verify_model_caching.py       # Model caching verification script
 ├── verify_model_warmup.py        # Model warm-up verification script

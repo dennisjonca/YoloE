@@ -10,6 +10,7 @@ warnings.simplefilter('ignore')
 import torch
 import cv2
 import os
+import traceback
 import numpy as np
 from PIL import Image
 from tqdm import trange
@@ -53,7 +54,12 @@ def letterbox(im, new_shape=(640, 640), color=(114, 114, 114), auto=True, scaleF
 
 
 class YoloTarget(torch.nn.Module):
-    """Target layer for GradCAM computation"""
+    """Target layer for GradCAM computation
+    
+    This target function focuses GradCAM on areas with high detection confidence,
+    producing "hot" (red/yellow) areas where objects are detected, rather than
+    weak, diffuse gradients that appear as "cold" (blue) areas everywhere.
+    """
     
     def __init__(self, output_type, conf, ratio):
         super().__init__()
@@ -62,14 +68,34 @@ class YoloTarget(torch.nn.Module):
         self.ratio = ratio
 
     def forward(self, data):
-        # Simple target that returns sum of outputs
-        # This is a simplified version for compatibility
+        """
+        Compute target for gradient backpropagation.
+        
+        For YOLO models, we want to focus on high-confidence detections, not all outputs.
+        This is achieved by using top-k values instead of sum(), which creates
+        stronger, more focused gradients that produce visible "hot" areas in the heatmap.
+        
+        Args:
+            data: Model output tensor(s)
+            
+        Returns:
+            Scalar tensor for gradient computation
+        """
         if isinstance(data, (list, tuple)):
             data = data[0] if len(data) > 0 else data
         
         if torch.is_tensor(data):
-            # Return sum of tensor for gradient computation
-            return data.sum()
+            # Use top-k sum to focus on strong detections
+            # Take top 1% of activations or at least 50 values
+            k = max(50, int(data.numel() * 0.01))
+            k = min(k, data.numel())
+            
+            if data.numel() > 0:
+                top_values = torch.topk(data.flatten(), k=k).values
+                return top_values.sum()
+            else:
+                return torch.tensor(0.0, device=data.device)
+        
         return torch.tensor(0.0)
 
 
@@ -181,11 +207,10 @@ class YoloEHeatmapGenerator:
                 grayscale_cam = grayscale_cam[0, :]
             except Exception as e:
                 print(f"[WARN] GradCAM generation failed: {e}, using simple approach")
-                # Fallback: create a simple heatmap based on model output
-                with torch.no_grad():
-                    output = self.model(tensor)
-                # Create a simple activation map
-                grayscale_cam = np.random.rand(*img_float.shape[:2]) * 0.5
+                traceback.print_exc()
+                # Fallback: create a uniform heatmap that will be filled by detections
+                # Using zeros so that renormalization will highlight detected regions
+                grayscale_cam = np.zeros(img_float.shape[:2], dtype=np.float32)
             
             cam_image = show_cam_on_image(img_float, grayscale_cam, use_rgb=True)
 

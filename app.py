@@ -66,34 +66,34 @@ def load_model(model_size, class_names=None, visual_prompt_data=None):
     # For visual prompting, we need to use PyTorch model, not ONNX
     # because visual prompts are passed per-frame to predict()
     if visual_prompt_data is not None:
-        print(f"[INFO] Loading PyTorch model for visual prompting...")
+        log_to_console(f"Loading PyTorch model for visual prompting...")
         loaded_model = YOLOE(pt_model_path)
         
         # Validate visual prompt data
-        print(f"[INFO] Validating visual prompts with {len(visual_prompt_data['boxes'])} boxes")
+        log_to_console(f"Validating visual prompts with {len(visual_prompt_data['boxes'])} boxes")
         try:
             boxes = visual_prompt_data['boxes']
             if len(boxes) == 0:
                 raise ValueError("No boxes provided")
             
             # Boxes should be in absolute pixel coordinates (x1, y1, x2, y2)
-            print(f"[DEBUG] Visual prompt boxes (absolute coords): {boxes}")
-            print(f"[INFO] Visual prompting configured successfully")
-            print(f"[INFO] Note: Visual prompts will be applied per-frame during inference")
+            log_to_console(f"Visual prompt boxes (absolute coords): {boxes}")
+            log_to_console(f"Visual prompting configured successfully")
+            log_to_console(f"Note: Visual prompts will be applied per-frame during inference")
             
         except Exception as e:
             error_msg = str(e) if str(e) else "Unknown error"
-            print(f"[ERROR] Failed to validate visual prompts: {error_msg}")
-            print(f"[ERROR] Traceback: {traceback.format_exc()}")
+            log_to_console(f"ERROR: Failed to validate visual prompts: {error_msg}")
+            log_to_console(f"ERROR: Traceback: {traceback.format_exc()}")
             visual_prompt_success = False
     else:
         # Text prompting mode: can use ONNX model if cached
         if os.path.exists(onnx_model_path):
-            print(f"[INFO] Loading cached ONNX model from {onnx_model_path}")
+            log_to_console(f"Loading cached ONNX model from {onnx_model_path}")
             loaded_model = YOLOE(onnx_model_path)
-            print(f"[INFO] Using cached model with classes: {class_names}")
+            log_to_console(f"Using cached model with classes: {class_names}")
         else:
-            print(f"[INFO] ONNX model not found. Exporting from PyTorch model...")
+            log_to_console(f"ONNX model not found. Exporting from PyTorch model...")
             loaded_model = YOLOE(pt_model_path)
             
             # Text prompting mode: use class names
@@ -102,12 +102,12 @@ def load_model(model_size, class_names=None, visual_prompt_data=None):
             export_model = loaded_model.export(format="onnx", imgsz=320)
             # Reload with the exported ONNX model
             loaded_model = YOLOE(export_model)
-            print(f"[INFO] ONNX model exported and cached at {export_model}")
-            print(f"[INFO] Model classes set to: {class_names}")
+            log_to_console(f"ONNX model exported and cached at {export_model}")
+            log_to_console(f"Model classes set to: {class_names}")
     
     # Warm up the model to initialize inference session
     # This prevents delays on first inference
-    print(f"[INFO] Warming up model {model_size}...")
+    log_to_console(f"Warming up model {model_size}...")
     dummy_frame = np.zeros((320, 320, 3), dtype=np.uint8)
     if visual_prompt_data is not None:
         # For visual prompting, warm up with predict() and YOLOEVPSegPredictor
@@ -121,7 +121,7 @@ def load_model(model_size, class_names=None, visual_prompt_data=None):
     else:
         # For text prompting, warm up with track()
         _ = list(loaded_model.track(source=dummy_frame, conf=0.2, iou=0.4, show=False, persist=True, verbose=False))
-    print(f"[INFO] Model {model_size} warm-up complete - ready for inference")
+    log_to_console(f"Model {model_size} warm-up complete - ready for inference")
     
     return loaded_model, visual_prompt_success
 
@@ -292,8 +292,7 @@ def inference_thread():
                     grayscale_cam = heatmap_generator.method(tensor, [heatmap_generator.target])
                     grayscale_cam = grayscale_cam[0, :]
                 except Exception as e:
-                    print(f"[WARN] GradCAM generation failed: {e}, using fallback")
-                    traceback.print_exc()
+                    log_to_console(f"WARN: GradCAM generation failed: {e}, using fallback")
                     # Fallback: create a zero heatmap that will be filled by detected regions
                     grayscale_cam = np.zeros(img_float.shape[:2], dtype=np.float32)
                 
@@ -336,7 +335,7 @@ def inference_thread():
                 frame = cv2.cvtColor(cam_image, cv2.COLOR_RGB2BGR)
                 
             except Exception as e:
-                print(f"[WARN] Heatmap generation failed: {e}, using normal frame")
+                log_to_console(f"WARN: Heatmap generation failed: {e}, using normal frame")
                 # Continue with normal detection on error
         
         elif use_visual_prompt and visual_prompt_dict is not None:
@@ -1048,12 +1047,12 @@ def set_classes():
     onnx_model_path = f"yoloe-11{current_model}-seg.onnx"
     if os.path.exists(onnx_model_path):
         os.remove(onnx_model_path)
-        print(f"[INFO] Removed cached ONNX model to re-export with new classes")
+        log_to_console(f"Removed cached ONNX model to re-export with new classes")
     
     # Reload the model with new classes
-    print(f"[INFO] Updating classes to: {class_list}")
+    log_to_console(f"Updating classes to: {class_list}")
     model, _ = load_model(current_model, class_list)
-    print(f"[INFO] Classes updated successfully")
+    log_to_console(f"Classes updated successfully")
     
     return '<meta http-equiv="refresh" content="0; url=/" />'
 
@@ -1079,7 +1078,7 @@ def capture_snapshot():
     with lock:
         snapshot_frame = frame.copy()
     
-    print(f"[INFO] Snapshot captured")
+    log_to_console(f"Snapshot captured")
     return '<meta http-equiv="refresh" content="0; url=/" />'
 
 
@@ -1124,8 +1123,8 @@ def save_visual_prompt():
         
         # Convert boxes from relative coordinates to absolute coordinates
         h, w = snapshot_frame.shape[:2]
-        print(f"[DEBUG] Snapshot frame shape: {snapshot_frame.shape} (H={h}, W={w})")
-        print(f"[DEBUG] Boxes from UI (relative): {boxes_data}")
+        log_to_console(f"Snapshot frame shape: {snapshot_frame.shape} (H={h}, W={w})")
+        log_to_console(f"Boxes from UI (relative): {boxes_data}")
         
         snapshot_boxes = []
         for box in boxes_data:
@@ -1135,7 +1134,7 @@ def save_visual_prompt():
             y2 = int(box['y2'] * h)
             snapshot_boxes.append([x1, y1, x2, y2])
         
-        print(f"[DEBUG] Snapshot boxes (absolute coords): {snapshot_boxes}")
+        log_to_console(f"Snapshot boxes (absolute coords): {snapshot_boxes}")
         
         # Create visual prompt dictionary in the format expected by predict()
         # According to implementation inspection:
@@ -1156,9 +1155,9 @@ def save_visual_prompt():
             'cls': cls_list  # List of class IDs (integers)
         }
         
-        print(f"[INFO] Created visual prompt dict with {len(snapshot_boxes)} boxes")
-        print(f"[DEBUG] Visual prompt bboxes: {visual_prompt_dict['bboxes']}")
-        print(f"[DEBUG] Visual prompt cls: {visual_prompt_dict['cls']}")
+        log_to_console(f"Created visual prompt dict with {len(snapshot_boxes)} boxes")
+        log_to_console(f"Visual prompt bboxes: {visual_prompt_dict['bboxes']}")
+        log_to_console(f"Visual prompt cls: {visual_prompt_dict['cls']}")
         
         # Switch to visual prompting mode
         use_visual_prompt = True
@@ -1167,7 +1166,7 @@ def save_visual_prompt():
         onnx_model_path = f"yoloe-11{current_model}-seg.onnx"
         if os.path.exists(onnx_model_path):
             os.remove(onnx_model_path)
-            print(f"[INFO] Removed cached ONNX model (using PyTorch for visual prompting)")
+            log_to_console(f"Removed cached ONNX model (using PyTorch for visual prompting)")
         
         # Prepare visual prompt data for model loading
         visual_prompt_data = {
@@ -1176,19 +1175,19 @@ def save_visual_prompt():
         }
         
         # Reload the model for visual prompting
-        print(f"[INFO] Loading model for visual prompting with {len(snapshot_boxes)} boxes")
+        log_to_console(f"Loading model for visual prompting with {len(snapshot_boxes)} boxes")
         model, success = load_model(current_model, visual_prompt_data=visual_prompt_data)
         
         if success:
-            print(f"[INFO] Model loaded successfully for visual prompting")
+            log_to_console(f"Model loaded successfully for visual prompting")
         else:
-            print(f"[WARN] Visual prompt validation failed")
+            log_to_console(f"WARN: Visual prompt validation failed")
         
         return '<meta http-equiv="refresh" content="0; url=/" />'
         
     except Exception as e:
-        print(f"[ERROR] Failed to save visual prompt: {e}")
-        print(f"[ERROR] Traceback: {traceback.format_exc()}")
+        log_to_console(f"ERROR: Failed to save visual prompt: {e}")
+        log_to_console(f"ERROR: Traceback: {traceback.format_exc()}")
         return f"<html><body><h3>Error: {str(e)}</h3><a href='/'>Back</a></body></html>"
 
 
@@ -1209,13 +1208,13 @@ def clear_visual_prompt():
     onnx_model_path = f"yoloe-11{current_model}-seg.onnx"
     if os.path.exists(onnx_model_path):
         os.remove(onnx_model_path)
-        print(f"[INFO] Removed cached ONNX model to re-export with text prompts")
+        log_to_console(f"Removed cached ONNX model to re-export with text prompts")
     
     # Reload the model with text prompts
     class_list = [name.strip() for name in current_classes.split(",") if name.strip()]
-    print(f"[INFO] Returning to text prompting mode with classes: {class_list}")
+    log_to_console(f"Returning to text prompting mode with classes: {class_list}")
     model, _ = load_model(current_model, class_list)
-    print(f"[INFO] Switched back to text prompting mode")
+    log_to_console(f"Switched back to text prompting mode")
     
     return '<meta http-equiv="refresh" content="0; url=/" />'
 
@@ -1249,8 +1248,8 @@ def generate_heatmap():
         hw_info = get_hardware_info()
         device = 'cuda:0' if hw_info['cuda_available'] else 'cpu'
         
-        print(f"[INFO] Generating heatmap using device: {device}")
-        print(f"[INFO] Model: {weight_path}")
+        log_to_console(f"Generating heatmap using device: {device}")
+        log_to_console(f"Model: {weight_path}")
         
         # Get default heatmap parameters
         params = get_default_params()
@@ -1265,7 +1264,7 @@ def generate_heatmap():
         
         if success:
             last_heatmap_path = output_path
-            print(f"[INFO] Heatmap generated successfully: {output_path}")
+            log_to_console(f"Heatmap generated successfully: {output_path}")
             return f'''
                 <html>
                 <body>
@@ -1281,8 +1280,8 @@ def generate_heatmap():
             return "<html><body><h3>Failed to generate heatmap. Check console for errors.</h3><a href='/'>Back</a></body></html>"
             
     except Exception as e:
-        print(f"[ERROR] Failed to generate heatmap: {e}")
-        print(f"[ERROR] Traceback: {traceback.format_exc()}")
+        log_to_console(f"ERROR: Failed to generate heatmap: {e}")
+        log_to_console(f"ERROR: Traceback: {traceback.format_exc()}")
         # Don't expose internal error details to user
         return "<html><body><h3>Failed to generate heatmap. Check server logs for details.</h3><a href='/'>Back</a></body></html>"
 
@@ -1304,7 +1303,7 @@ def view_heatmap():
         
         # Ensure the requested path is within heatmaps directory
         if not requested_path.startswith(heatmaps_dir):
-            print(f"[SECURITY] Path traversal attempt blocked: {path}")
+            log_to_console(f"SECURITY: Path traversal attempt blocked: {path}")
             return "Access denied", 403
         
         # Check if file exists
@@ -1314,7 +1313,7 @@ def view_heatmap():
         return send_file(requested_path, mimetype='image/jpeg')
         
     except Exception as e:
-        print(f"[ERROR] Error serving heatmap: {e}")
+        log_to_console(f"ERROR: Error serving heatmap: {e}")
         return "Error loading heatmap", 500
 
 

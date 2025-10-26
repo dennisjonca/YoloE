@@ -1,4 +1,9 @@
 from flask import Flask, Response, request, send_file
+
+try:
+    from flask import escape
+except ImportError:
+    from markupsafe import escape
 from ultralytics import YOLOE
 import cv2, threading, time, platform, os
 import numpy as np
@@ -19,7 +24,8 @@ current_classes = "person, plant"  # Default class prompts
 
 # Detection parameters
 current_conf = 0.25  # Default confidence threshold (0.0 - 1.0)
-current_iou = 0.45   # Default IoU threshold for NMS (0.0 - 1.0)
+current_iou = 0.45  # Default IoU threshold for NMS (0.0 - 1.0)
+
 
 def get_hardware_info():
     """Get information about available hardware for inference."""
@@ -31,52 +37,53 @@ def get_hardware_info():
         'cuda_device_name': None,
         'device_name': 'CPU'
     }
-    
+
     if info['cuda_available']:
         info['cuda_device_count'] = torch.cuda.device_count()
         if info['cuda_device_count'] > 0:
             info['cuda_device_name'] = torch.cuda.get_device_name(0)
             info['device_name'] = f"GPU: {info['cuda_device_name']}"
-    
+
     return info
+
 
 def load_model(model_size, class_names=None, visual_prompt_data=None):
     """Load YOLO model with the specified size (s, m, or l) and class names or visual prompts.
-    
+
     For visual prompting, the model is NOT pre-configured. Instead, visual_prompt_data is stored
     and passed to predict() during inference.
-    
+
     Returns:
         tuple: (model, success) where success is True if visual prompts were validated successfully,
                or True if text prompts were used (no visual prompts requested)
     """
     if class_names is None:
         class_names = ["person", "plant"]
-    
+
     # Define the ONNX model path
     onnx_model_path = f"yoloe-11{model_size}-seg.onnx"
     pt_model_path = f"yoloe-11{model_size}-seg.pt"
-    
+
     visual_prompt_success = True  # Track if visual prompts were validated successfully
-    
+
     # For visual prompting, we need to use PyTorch model, not ONNX
     # because visual prompts are passed per-frame to predict()
     if visual_prompt_data is not None:
         print(f"[INFO] Loading PyTorch model for visual prompting...")
         loaded_model = YOLOE(pt_model_path)
-        
+
         # Validate visual prompt data
         print(f"[INFO] Validating visual prompts with {len(visual_prompt_data['boxes'])} boxes")
         try:
             boxes = visual_prompt_data['boxes']
             if len(boxes) == 0:
                 raise ValueError("No boxes provided")
-            
+
             # Boxes should be in absolute pixel coordinates (x1, y1, x2, y2)
             print(f"[DEBUG] Visual prompt boxes (absolute coords): {boxes}")
             print(f"[INFO] Visual prompting configured successfully")
             print(f"[INFO] Note: Visual prompts will be applied per-frame during inference")
-            
+
         except Exception as e:
             error_msg = str(e) if str(e) else "Unknown error"
             print(f"[ERROR] Failed to validate visual prompts: {error_msg}")
@@ -91,16 +98,16 @@ def load_model(model_size, class_names=None, visual_prompt_data=None):
         else:
             print(f"[INFO] ONNX model not found. Exporting from PyTorch model...")
             loaded_model = YOLOE(pt_model_path)
-            
+
             # Text prompting mode: use class names
             loaded_model.set_classes(class_names, loaded_model.get_text_pe(class_names))
-            
+
             export_model = loaded_model.export(format="onnx", imgsz=320)
             # Reload with the exported ONNX model
             loaded_model = YOLOE(export_model)
             print(f"[INFO] ONNX model exported and cached at {export_model}")
             print(f"[INFO] Model classes set to: {class_names}")
-    
+
     # Warm up the model to initialize inference session
     # This prevents delays on first inference
     print(f"[INFO] Warming up model {model_size}...")
@@ -112,14 +119,15 @@ def load_model(model_size, class_names=None, visual_prompt_data=None):
             'bboxes': [[10, 10, 50, 50]],  # List of boxes
             'cls': [0]  # List of class IDs (integers)
         }
-        _ = list(loaded_model.predict(source=dummy_frame, visual_prompts=dummy_visual_prompts, 
+        _ = list(loaded_model.predict(source=dummy_frame, visual_prompts=dummy_visual_prompts,
                                       predictor=YOLOEVPSegPredictor, conf=0.2, show=False, verbose=False))
     else:
         # For text prompting, warm up with track()
         _ = list(loaded_model.track(source=dummy_frame, conf=0.2, iou=0.4, show=False, persist=True, verbose=False))
     print(f"[INFO] Model {model_size} warm-up complete - ready for inference")
-    
+
     return loaded_model, visual_prompt_success
+
 
 # Load the default model
 model, _ = load_model(current_model, current_classes.split(", "))
@@ -153,6 +161,24 @@ fps_start_time = time.time()
 current_fps = 0.0
 inference_time = 0.0
 detection_count = 0
+
+# Console log buffer
+console_log_buffer = []
+console_log_lock = threading.Lock()  # Lock for thread-safe access to console buffer
+max_console_lines = 500
+
+
+def log_to_console(message):
+    """Add a message to the console log buffer."""
+    global console_log_buffer
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    log_entry = f"[{timestamp}] {message}"
+    with console_log_lock:
+        console_log_buffer.append(log_entry)
+        # Keep only the last max_console_lines
+        if len(console_log_buffer) > max_console_lines:
+            console_log_buffer = console_log_buffer[-max_console_lines:]
+    print(log_entry)  # Also print to actual console
 
 
 # -------------------------------
@@ -188,49 +214,49 @@ def inference_thread():
     global use_visual_prompt, visual_prompt_dict, heatmap_mode, heatmap_generator
 
     thread_alive = True
-    print(f"[INFO] Starting inference on camera {current_camera}")
-    print(f"[INFO] Detection parameters: conf={current_conf}, iou={current_iou}")
-    
+    log_to_console(f"Starting inference on camera {current_camera}")
+    log_to_console(f"Detection parameters: conf={current_conf}, iou={current_iou}")
+
     # Initialize heatmap generator if in heatmap mode
     if heatmap_mode:
-        print(f"[INFO] Initializing heatmap mode")
+        log_to_console("Initializing heatmap mode")
         try:
             weight_path = f"yoloe-11{current_model}-seg.pt"
             hw_info = get_hardware_info()
             device = 'cuda:0' if hw_info['cuda_available'] else 'cpu'
-            
+
             params = get_default_params()
             params['device'] = device
             params['show_box'] = True
             params['renormalize'] = True
-            
+
             heatmap_generator = YoloEHeatmapGenerator(weight_path, **params)
-            print(f"[INFO] Heatmap generator initialized for live mode")
+            log_to_console("Heatmap generator initialized for live mode")
         except Exception as e:
-            print(f"[ERROR] Failed to initialize heatmap generator: {e}")
-            print(f"[WARN] Falling back to normal mode")
+            log_to_console(f"Failed to initialize heatmap generator: {e}")
+            log_to_console("Falling back to normal mode")
             heatmap_mode = False
             heatmap_generator = None
-    
+
     if use_visual_prompt:
-        print(f"[INFO] Using visual prompting mode")
+        log_to_console("Using visual prompting mode")
         from ultralytics.models.yolo.yoloe import YOLOEVPSegPredictor
     else:
-        print(f"[INFO] Using text prompting mode")
+        log_to_console("Using text prompting mode")
         # Reset tracker state to avoid tracking issues when switching cameras
         try:
             if hasattr(model, 'predictor') and model.predictor is not None:
                 if hasattr(model.predictor, 'trackers') and model.predictor.trackers:
                     model.predictor.trackers[0].reset()
-                    print(f"[INFO] Tracker reset for camera {current_camera}")
+                    log_to_console(f"Tracker reset for camera {current_camera}")
         except Exception as e:
-            print(f"[WARN] Could not reset tracker: {e}")
+            log_to_console(f"Could not reset tracker: {e}")
 
     # Get camera from manager (pre-opened if available)
     cap = camera_manager.get_camera(current_camera) if camera_manager else cv2.VideoCapture(current_camera)
 
     if cap is None or not cap.isOpened():
-        print(f"[ERROR] Could not open camera {current_camera}")
+        log_to_console(f"Could not open camera {current_camera}")
         thread_alive = False
         return
 
@@ -242,28 +268,29 @@ def inference_thread():
     while running:
         success, frame = cap.read()
         if not success:
-            print(f"[WARN] Camera {current_camera} read() failed, retrying...")
+            log_to_console(f"Camera {current_camera} read() failed, retrying...")
             time.sleep(2)
             continue
 
         # Measure inference time
         inference_start = time.time()
-        
+
         # Run inference based on heatmap or prompting mode
         detections_found = 0
-        
+
         if heatmap_mode and heatmap_generator is not None:
             # Heatmap mode: generate heatmap overlay for live feed
             try:
                 # Generate heatmap using the heatmap generator's internal methods
                 from heatmap_generator import letterbox
                 from pytorch_grad_cam.utils.image import show_cam_on_image
-                
+
                 # Process image for heatmap
                 img = letterbox(frame)[0]
                 img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 img_float = np.float32(img_rgb) / 255.0
-                tensor = torch.from_numpy(np.transpose(img_float, axes=[2, 0, 1])).unsqueeze(0).to(heatmap_generator.device)
+                tensor = torch.from_numpy(np.transpose(img_float, axes=[2, 0, 1])).unsqueeze(0).to(
+                    heatmap_generator.device)
                 tensor.requires_grad_(True)
 
                 # Generate GradCAM
@@ -275,10 +302,10 @@ def inference_thread():
                     traceback.print_exc()
                     # Fallback: create a zero heatmap that will be filled by detected regions
                     grayscale_cam = np.zeros(img_float.shape[:2], dtype=np.float32)
-                
+
                 # Create heatmap overlay
                 cam_image = show_cam_on_image(img_float, grayscale_cam, use_rgb=True)
-                
+
                 # Get predictions for boxes
                 results = heatmap_generator.yolo_model.predict(
                     source=frame,
@@ -286,22 +313,22 @@ def inference_thread():
                     verbose=False,
                     show=False
                 )
-                
+
                 # Process results and draw boxes
                 if results and len(results) > 0:
                     result = results[0]
                     boxes = result.boxes
-                    
+
                     if boxes is not None and len(boxes) > 0:
                         boxes_xyxy = boxes.xyxy.cpu().numpy().astype(np.int32)
                         detections_found = len(boxes_xyxy)
-                        
+
                         # Renormalize CAM in boxes if enabled
                         if heatmap_generator.renormalize and len(boxes_xyxy) > 0:
                             cam_image = heatmap_generator.renormalize_cam_in_bounding_boxes(
                                 boxes_xyxy, img_float, grayscale_cam
                             )
-                        
+
                         # Draw boxes
                         if heatmap_generator.show_box:
                             for i, box_xyxy in enumerate(boxes_xyxy):
@@ -310,33 +337,33 @@ def inference_thread():
                                 label = f'{heatmap_generator.model_names[cls_id]} {conf:.2f}'
                                 color = heatmap_generator.colors[cls_id % len(heatmap_generator.colors)]
                                 cam_image = heatmap_generator.draw_detections(box_xyxy, color, label, cam_image)
-                
+
                 # Convert back to BGR for display
                 frame = cv2.cvtColor(cam_image, cv2.COLOR_RGB2BGR)
-                
+
             except Exception as e:
                 print(f"[WARN] Heatmap generation failed: {e}, using normal frame")
                 # Continue with normal detection on error
-        
+
         elif use_visual_prompt and visual_prompt_dict is not None:
             # Visual prompting mode: use predict() with YOLOEVPSegPredictor
             # Pass visual prompts per-frame
             results = model.predict(
-                source=frame, 
+                source=frame,
                 visual_prompts=visual_prompt_dict,
                 predictor=YOLOEVPSegPredictor,
                 conf=current_conf,
                 show=False,
                 verbose=False
             )
-            
+
             # Process results (predict returns a list, not a generator)
             for result in results:
                 frame = result.orig_img.copy()
                 boxes = result.boxes.xyxy.cpu().numpy().astype(int)
                 names = result.names
                 detections_found = len(boxes)
-                
+
                 for box, cls_id in zip(boxes, result.boxes.cls):
                     x1, y1, x2, y2 = box
                     label = names[int(cls_id)]
@@ -350,7 +377,7 @@ def inference_thread():
                 boxes = result.boxes.xyxy.cpu().numpy().astype(int)
                 names = result.names
                 detections_found = len(boxes)
-                
+
                 for box, cls_id in zip(boxes, result.boxes.cls):
                     x1, y1, x2, y2 = box
                     label = names[int(cls_id)]
@@ -366,19 +393,19 @@ def inference_thread():
             current_fps = fps_counter / elapsed
             fps_counter = 0
             fps_start_time = time.time()
-        
+
         detection_count = detections_found
-        
+
         # Add performance overlay
         mode_indicator = "HEATMAP" if heatmap_mode else "NORMAL"
-        perf_text = f"[{mode_indicator}] FPS: {current_fps:.1f} | Inference: {inference_time*1000:.1f}ms | Detections: {detection_count}"
+        perf_text = f"[{mode_indicator}] FPS: {current_fps:.1f} | Inference: {inference_time * 1000:.1f}ms | Detections: {detection_count}"
         cv2.putText(frame, perf_text, (10, 30),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-        
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+
         # Add parameter info
         param_text = f"Conf: {current_conf:.2f} | IoU: {current_iou:.2f}"
         cv2.putText(frame, param_text, (10, 60),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
 
         with lock:
             latest_frame = frame.copy()
@@ -388,7 +415,7 @@ def inference_thread():
     if cap is not None:
         cap.release()
     thread_alive = False
-    print(f"[INFO] Stopped inference on camera {current_camera}")
+    log_to_console(f"Stopped inference on camera {current_camera}")
 
 
 # -------------------------------
@@ -420,7 +447,7 @@ def index():
     status = "Running" if running else "Stopped"
     prompt_mode = "Visual Prompting" if use_visual_prompt else "Text Prompting"
     has_snapshot = snapshot_frame is not None
-    
+
     # Get hardware information
     hw_info = get_hardware_info()
     hardware_status = f"{hw_info['device_name']} ({hw_info['cpu_count']} CPU cores)"
@@ -431,8 +458,9 @@ def index():
     )
 
     model_options_html = "".join(
-        [f'<option value="{model_size}" {"selected" if model_size == current_model else ""}>YoloE-11{model_size.upper()}</option>'
-         for model_size in available_models]
+        [
+            f'<option value="{model_size}" {"selected" if model_size == current_model else ""}>YoloE-11{model_size.upper()}</option>'
+            for model_size in available_models]
     )
 
     return f'''
@@ -468,115 +496,186 @@ def index():
                     opacity: 0.5;
                     cursor: not-allowed;
                 }}
+
+                /* Tab styling */
+                .tabs {{
+                    display: flex;
+                    border-bottom: 2px solid #ccc;
+                    margin-bottom: 20px;
+                }}
+                .tab {{
+                    padding: 12px 24px;
+                    cursor: pointer;
+                    background-color: #f0f0f0;
+                    border: 1px solid #ccc;
+                    border-bottom: none;
+                    margin-right: 5px;
+                    border-radius: 5px 5px 0 0;
+                    transition: background-color 0.3s;
+                }}
+                .tab:hover {{
+                    background-color: #e0e0e0;
+                }}
+                .tab.active {{
+                    background-color: white;
+                    font-weight: bold;
+                    border-bottom: 2px solid white;
+                    margin-bottom: -2px;
+                }}
+                .tab-content {{
+                    display: none;
+                }}
+                .tab-content.active {{
+                    display: block;
+                }}
+                #consoleOutput {{
+                    background-color: #1e1e1e;
+                    color: #00ff00;
+                    font-family: 'Courier New', monospace;
+                    padding: 15px;
+                    border-radius: 5px;
+                    max-height: 500px;
+                    overflow-y: auto;
+                    white-space: pre-wrap;
+                    word-wrap: break-word;
+                }}
             </style>
         </head>
         <body>
         <h1>YOLO Stream with Live Inference</h1>
-        
-        <div class="section">
-            <h2>Status & Controls</h2>
-            <h3>Status: {status}</h3>
-            <h3>Hardware: {hardware_status}</h3>
-            <h3>Current Model: YoloE-11{current_model.upper()}</h3>
-            <h3>Prompt Mode: {prompt_mode}</h3>
-            <h3>Heatmap Mode: {"ON" if heatmap_mode else "OFF"}</h3>
-            {"<h3>Current Classes: " + current_classes + "</h3>" if not use_visual_prompt else "<h3>Visual Prompts Active: " + str(len(snapshot_boxes)) + " boxes</h3>"}
-            {f"<h3>Performance: {current_fps:.1f} FPS | {inference_time*1000:.1f}ms inference | {detection_count} detections</h3>" if running else ""}
-            
-            <form action="/start" method="post" style="display:inline;">
-                <input type="submit" value="Start Inference" {"disabled" if running else ""} class="button">
-            </form>
-            <form action="/stop" method="post" style="display:inline;">
-                <input type="submit" value="Stop Inference" {"disabled" if not running else ""} class="button">
-            </form>
-            <form action="/toggle_heatmap" method="post" style="display:inline;">
-                <input type="submit" value="{"Disable" if heatmap_mode else "Enable"} Heatmap Mode" {"disabled" if running else ""} class="button">
-            </form>
+
+        <!-- Tab Navigation -->
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('tab1')">Status & Live Feed</div>
+            <div class="tab" onclick="switchTab('tab2')">Configuration & Parameters</div>
+            <div class="tab" onclick="switchTab('tab3')">Prompting</div>
+            <div class="tab" onclick="switchTab('tab4')">Console Output</div>
         </div>
-        
-        <div class="section">
-            <h2>Configuration</h2>
-            <form action="/set_camera" method="post">
-                <label for="camera">Select Camera:</label>
-                <select name="camera" id="camera" {"disabled" if running else ""}>
-                    {camera_options_html}
-                </select>
-                <input type="submit" value="Switch Camera" {"disabled" if running else ""} class="button">
-            </form>
-            <br><br>
-            <form action="/set_model" method="post">
-                <label for="model">Select Model:</label>
-                <select name="model" id="model" {"disabled" if running else ""}>
-                    {model_options_html}
-                </select>
-                <input type="submit" value="Switch Model" {"disabled" if running else ""} class="button">
-            </form>
-        </div>
-        
-        <div class="section">
-            <h2>Detection Parameters</h2>
-            <p>Adjust these parameters to improve detection performance. Lower confidence detects more objects but may include false positives.</p>
-            <form action="/set_parameters" method="post">
-                <label for="conf">Confidence Threshold (0.0 - 1.0):</label>
-                <input type="number" name="conf" id="conf" value="{current_conf}" min="0.0" max="1.0" step="0.05" {"disabled" if running else ""}><br><br>
-                
-                <label for="iou">IoU Threshold (0.0 - 1.0):</label>
-                <input type="number" name="iou" id="iou" value="{current_iou}" min="0.0" max="1.0" step="0.05" {"disabled" if running else ""}><br><br>
-                
-                <input type="submit" value="Update Parameters" {"disabled" if running else ""} class="button">
-            </form>
-            <p style="font-size: 0.9em; color: #666;">
-                <strong>Tips:</strong><br>
-                • Confidence 0.15-0.25: More detections, may include false positives<br>
-                • Confidence 0.25-0.40: Balanced (recommended for most cases)<br>
-                • Confidence 0.40-0.60: High confidence, fewer false positives<br>
-                • IoU 0.40-0.50: More lenient overlap detection<br>
-                • IoU 0.50-0.60: Standard overlap detection
-            </p>
-        </div>
-        
-        <div class="section">
-            <h2>Text Prompting</h2>
-            <form action="/set_classes" method="post">
-                <label for="classes">Custom Classes (comma-separated):</label>
-                <input type="text" name="classes" id="classes" value="{current_classes}" size="50" {"disabled" if running else ""}>
-                <input type="submit" value="Update Classes" {"disabled" if running else ""} class="button">
-            </form>
-        </div>
-        
-        <div class="section">
-            <h2>Visual Prompting & Heatmap Generation</h2>
-            <p>Capture a snapshot from the camera and either draw bounding boxes for tracking or generate a heatmap to visualize what the model "sees".</p>
-            
-            <form action="/capture_snapshot" method="post" style="display:inline;">
-                <input type="submit" value="Capture Snapshot" {"disabled" if running else ""} class="button">
-            </form>
-            
-            <button onclick="clearBoxes()" {"disabled" if running or not has_snapshot else ""} class="button">Clear Boxes</button>
-            <button onclick="saveVisualPrompt()" {"disabled" if running or not has_snapshot else ""} class="button">Save Snapshot with Boxes</button>
-            
-            <form action="/clear_visual_prompt" method="post" style="display:inline;">
-                <input type="submit" value="Clear Visual Prompt" {"disabled" if running or not use_visual_prompt else ""} class="button">
-            </form>
-            
-            <form action="/generate_heatmap" method="post" style="display:inline;">
-                <input type="submit" value="Generate Heatmap" {"disabled" if running or not has_snapshot else ""} class="button" title="Generate a heatmap showing what the model focuses on">
-            </form>
-            
-            <br><br>
-            
-            <div class="canvas-container">
-                <canvas id="snapshotCanvas" width="640" height="480"></canvas>
+
+        <!-- Tab 1: Status & Live Feed -->
+        <div id="tab1" class="tab-content active">
+            <div class="section">
+                <h2>Status & Controls</h2>
+                <h3>Status: {status}</h3>
+                <h3>Hardware: {hardware_status}</h3>
+                <h3>Current Model: YoloE-11{current_model.upper()}</h3>
+                <h3>Prompt Mode: {prompt_mode}</h3>
+                <h3>Heatmap Mode: {"ON" if heatmap_mode else "OFF"}</h3>
+                {"<h3>Current Classes: " + current_classes + "</h3>" if not use_visual_prompt else "<h3>Visual Prompts Active: " + str(len(snapshot_boxes)) + " boxes</h3>"}
+
+                <form action="/start" method="post" style="display:inline;">
+                    <input type="submit" value="Start Inference" {"disabled" if running else ""} class="button">
+                </form>
+                <form action="/stop" method="post" style="display:inline;">
+                    <input type="submit" value="Stop Inference" {"disabled" if not running else ""} class="button">
+                </form>
+                <form action="/toggle_heatmap" method="post" style="display:inline;">
+                    <input type="submit" value="{"Disable" if heatmap_mode else "Enable"} Heatmap Mode" {"disabled" if running else ""} class="button">
+                </form>
             </div>
-            
-            <p id="boxInfo">No boxes drawn</p>
+
+            <div class="section">
+                <h2>Live Feed</h2>
+                <img src="/video_feed" width="640" height="480">
+            </div>
         </div>
-        
-        <div class="section">
-            <h2>Live Feed</h2>
-            <img src="/video_feed" width="640" height="480">
+
+        <!-- Tab 2: Configuration & Detection Parameters -->
+        <div id="tab2" class="tab-content">
+            <div class="section">
+                <h2>Configuration</h2>
+                <form action="/set_camera" method="post">
+                    <label for="camera">Select Camera:</label>
+                    <select name="camera" id="camera" {"disabled" if running else ""}>
+                        {camera_options_html}
+                    </select>
+                    <input type="submit" value="Switch Camera" {"disabled" if running else ""} class="button">
+                </form>
+                <br><br>
+                <form action="/set_model" method="post">
+                    <label for="model">Select Model:</label>
+                    <select name="model" id="model" {"disabled" if running else ""}>
+                        {model_options_html}
+                    </select>
+                    <input type="submit" value="Switch Model" {"disabled" if running else ""} class="button">
+                </form>
+            </div>
+
+            <div class="section">
+                <h2>Detection Parameters</h2>
+                <p>Adjust these parameters to improve detection performance. Lower confidence detects more objects but may include false positives.</p>
+                <form action="/set_parameters" method="post">
+                    <label for="conf">Confidence Threshold (0.0 - 1.0):</label>
+                    <input type="number" name="conf" id="conf" value="{current_conf}" min="0.0" max="1.0" step="0.05" {"disabled" if running else ""}><br><br>
+
+                    <label for="iou">IoU Threshold (0.0 - 1.0):</label>
+                    <input type="number" name="iou" id="iou" value="{current_iou}" min="0.0" max="1.0" step="0.05" {"disabled" if running else ""}><br><br>
+
+                    <input type="submit" value="Update Parameters" {"disabled" if running else ""} class="button">
+                </form>
+                <p style="font-size: 0.9em; color: #666;">
+                    <strong>Tips:</strong><br>
+                    • Confidence 0.15-0.25: More detections, may include false positives<br>
+                    • Confidence 0.25-0.40: Balanced (recommended for most cases)<br>
+                    • Confidence 0.40-0.60: High confidence, fewer false positives<br>
+                    • IoU 0.40-0.50: More lenient overlap detection<br>
+                    • IoU 0.50-0.60: Standard overlap detection
+                </p>
+            </div>
         </div>
-        
+
+        <!-- Tab 3: Text and Visual Prompting -->
+        <div id="tab3" class="tab-content">
+            <div class="section">
+                <h2>Text Prompting</h2>
+                <form action="/set_classes" method="post">
+                    <label for="classes">Custom Classes (comma-separated):</label>
+                    <input type="text" name="classes" id="classes" value="{current_classes}" size="50" {"disabled" if running else ""}>
+                    <input type="submit" value="Update Classes" {"disabled" if running else ""} class="button">
+                </form>
+            </div>
+
+            <div class="section">
+                <h2>Visual Prompting & Heatmap Generation</h2>
+                <p>Capture a snapshot from the camera and either draw bounding boxes for tracking or generate a heatmap to visualize what the model "sees".</p>
+
+                <form action="/capture_snapshot" method="post" style="display:inline;">
+                    <input type="submit" value="Capture Snapshot" {"disabled" if running else ""} class="button">
+                </form>
+
+                <button onclick="clearBoxes()" {"disabled" if running or not has_snapshot else ""} class="button">Clear Boxes</button>
+                <button onclick="saveVisualPrompt()" {"disabled" if running or not has_snapshot else ""} class="button">Save Snapshot with Boxes</button>
+
+                <form action="/clear_visual_prompt" method="post" style="display:inline;">
+                    <input type="submit" value="Clear Visual Prompt" {"disabled" if running or not use_visual_prompt else ""} class="button">
+                </form>
+
+                <form action="/generate_heatmap" method="post" style="display:inline;">
+                    <input type="submit" value="Generate Heatmap" {"disabled" if running or not has_snapshot else ""} class="button" title="Generate a heatmap showing what the model focuses on">
+                </form>
+
+                <br><br>
+
+                <div class="canvas-container">
+                    <canvas id="snapshotCanvas" width="640" height="480"></canvas>
+                </div>
+
+                <p id="boxInfo">No boxes drawn</p>
+            </div>
+        </div>
+
+        <!-- Tab 4: Console Output -->
+        <div id="tab4" class="tab-content">
+            <div class="section">
+                <h2>Console Output</h2>
+                <p>View the application logs and status messages below. This updates every 5 seconds.</p>
+                <button onclick="refreshConsole()" class="button">Refresh Now</button>
+                <button onclick="toggleAutoRefresh()" class="button" id="autoRefreshBtn">Auto-Refresh: ON</button>
+                <button onclick="clearConsoleDisplay()" class="button">Clear Display</button>
+                <div id="consoleOutput">Loading console output...</div>
+            </div>
+        </div>
+
         <script>
             const canvas = document.getElementById('snapshotCanvas');
             const ctx = canvas.getContext('2d');
@@ -584,7 +683,84 @@ def index():
             let isDrawing = false;
             let startX, startY;
             let snapshotLoaded = {str(has_snapshot).lower()};
-            
+            let autoRefreshEnabled = true;
+            let consoleRefreshInterval = null;
+
+            // Tab switching function
+            function switchTab(tabId) {{
+                // Hide all tab contents
+                const tabContents = document.querySelectorAll('.tab-content');
+                tabContents.forEach(content => content.classList.remove('active'));
+
+                // Remove active class from all tabs
+                const tabs = document.querySelectorAll('.tab');
+                tabs.forEach(tab => tab.classList.remove('active'));
+
+                // Show selected tab content
+                document.getElementById(tabId).classList.add('active');
+
+                // Add active class to clicked tab by finding the one with matching onclick
+                const clickedTab = Array.from(tabs).find(tab => 
+                    tab.getAttribute('onclick') === `switchTab('${{tabId}}')`
+                );
+                if (clickedTab) {{
+                    clickedTab.classList.add('active');
+                }}
+
+                // Start console refresh if on tab 4
+                if (tabId === 'tab4') {{
+                    startConsoleRefresh();
+                }} else {{
+                    stopConsoleRefresh();
+                }}
+            }}
+
+            // Console output functions
+            function refreshConsole() {{
+                fetch('/console_output')
+                    .then(response => response.text())
+                    .then(data => {{
+                        document.getElementById('consoleOutput').textContent = data;
+                        // Auto-scroll to bottom
+                        const consoleDiv = document.getElementById('consoleOutput');
+                        consoleDiv.scrollTop = consoleDiv.scrollHeight;
+                    }})
+                    .catch(error => {{
+                        console.error('Error fetching console output:', error);
+                    }});
+            }}
+
+            function startConsoleRefresh() {{
+                if (autoRefreshEnabled && !consoleRefreshInterval) {{
+                    refreshConsole(); // Initial load
+                    consoleRefreshInterval = setInterval(refreshConsole, 5000);
+                }}
+            }}
+
+            function stopConsoleRefresh() {{
+                if (consoleRefreshInterval) {{
+                    clearInterval(consoleRefreshInterval);
+                    consoleRefreshInterval = null;
+                }}
+            }}
+
+            function toggleAutoRefresh() {{
+                autoRefreshEnabled = !autoRefreshEnabled;
+                const btn = document.getElementById('autoRefreshBtn');
+                btn.textContent = 'Auto-Refresh: ' + (autoRefreshEnabled ? 'ON' : 'OFF');
+
+                if (autoRefreshEnabled) {{
+                    startConsoleRefresh();
+                }} else {{
+                    stopConsoleRefresh();
+                }}
+            }}
+
+            function clearConsoleDisplay() {{
+                const timestamp = new Date().toISOString().substring(0, 19).replace('T', ' ');
+                document.getElementById('consoleOutput').textContent = `[${{timestamp}}] Console display cleared (server logs unchanged)`;
+            }}
+
             // Load snapshot image
             function loadSnapshot() {{
                 const img = new Image();
@@ -596,15 +772,15 @@ def index():
                 }};
                 img.src = '/snapshot_image?t=' + new Date().getTime();
             }}
-            
+
             if (snapshotLoaded) {{
                 loadSnapshot();
             }}
-            
+
             // Mouse event handlers for drawing boxes
             canvas.addEventListener('mousedown', (e) => {{
                 if ({str(running).lower()} || !snapshotLoaded) return;
-                
+
                 const rect = canvas.getBoundingClientRect();
                 // Scale mouse coordinates to canvas logical coordinates
                 const scaleX = canvas.width / rect.width;
@@ -613,71 +789,71 @@ def index():
                 startY = (e.clientY - rect.top) * scaleY;
                 isDrawing = true;
             }});
-            
+
             canvas.addEventListener('mousemove', (e) => {{
                 if (!isDrawing) return;
-                
+
                 const rect = canvas.getBoundingClientRect();
                 // Scale mouse coordinates to canvas logical coordinates
                 const scaleX = canvas.width / rect.width;
                 const scaleY = canvas.height / rect.height;
                 const currentX = (e.clientX - rect.left) * scaleX;
                 const currentY = (e.clientY - rect.top) * scaleY;
-                
+
                 // Redraw everything
                 loadSnapshot();
-                
+
                 // Draw current box being drawn
                 ctx.strokeStyle = 'lime';
                 ctx.lineWidth = 2;
                 ctx.strokeRect(startX, startY, currentX - startX, currentY - startY);
             }});
-            
+
             canvas.addEventListener('mouseup', (e) => {{
                 if (!isDrawing) return;
-                
+
                 const rect = canvas.getBoundingClientRect();
                 // Scale mouse coordinates to canvas logical coordinates
                 const scaleX = canvas.width / rect.width;
                 const scaleY = canvas.height / rect.height;
                 const endX = (e.clientX - rect.left) * scaleX;
                 const endY = (e.clientY - rect.top) * scaleY;
-                
+
                 // Save the box (normalize to 0-1 range)
                 const x1 = Math.min(startX, endX) / canvas.width;
                 const y1 = Math.min(startY, endY) / canvas.height;
                 const x2 = Math.max(startX, endX) / canvas.width;
                 const y2 = Math.max(startY, endY) / canvas.height;
-                
+
                 // Only save if box has some size
                 if (Math.abs(x2 - x1) > 0.01 && Math.abs(y2 - y1) > 0.01) {{
                     boxes.push({{ x1, y1, x2, y2 }});
                     updateBoxInfo();
                     redrawBoxes();
                 }}
-                
+
                 isDrawing = false;
             }});
-            
+
             function redrawBoxes() {{
                 for (const box of boxes) {{
                     const x1 = box.x1 * canvas.width;
                     const y1 = box.y1 * canvas.height;
                     const x2 = box.x2 * canvas.width;
                     const y2 = box.y2 * canvas.height;
-                    
+
                     ctx.strokeStyle = 'lime';
                     ctx.lineWidth = 2;
                     ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
                 }}
             }}
-            
+
             function clearBoxes() {{
                 boxes = [];
                 loadSnapshot();
                 updateBoxInfo();
             }}
-            
+
             function updateBoxInfo() {{
                 const info = document.getElementById('boxInfo');
                 if (boxes.length === 0) {{
@@ -686,22 +862,22 @@ def index():
                     info.textContent = `${{boxes.length}} box(es) drawn`;
                 }}
             }}
-            
+
             function saveVisualPrompt() {{
                 if (boxes.length === 0) {{
                     alert('Please draw at least one bounding box first.');
                     return;
                 }}
-                
+
                 const form = document.createElement('form');
                 form.method = 'POST';
                 form.action = '/save_visual_prompt';
-                
+
                 const input = document.createElement('input');
                 input.type = 'hidden';
                 input.name = 'boxes';
                 input.value = JSON.stringify(boxes);
-                
+
                 form.appendChild(input);
                 document.body.appendChild(form);
                 form.submit();
@@ -748,14 +924,14 @@ def stop_inference():
 def toggle_heatmap():
     """Toggle heatmap mode on/off."""
     global heatmap_mode
-    
+
     if running:
         return "<html><body><h3>Stop inference first!</h3><a href='/'>Back</a></body></html>"
-    
+
     heatmap_mode = not heatmap_mode
     mode_str = "ON" if heatmap_mode else "OFF"
-    print(f"[INFO] Heatmap mode toggled: {mode_str}")
-    
+    log_to_console(f"Heatmap mode toggled: {mode_str}")
+
     return '<meta http-equiv="refresh" content="0; url=/" />'
 
 
@@ -789,7 +965,7 @@ def set_camera():
     if camera_manager:
         camera_manager.request_pre_open(new_cam)
 
-    print(f"[INFO] Camera changed to {current_camera}")
+    log_to_console(f"Camera changed to {current_camera}")
     return '<meta http-equiv="refresh" content="0; url=/" />'
 
 
@@ -810,12 +986,12 @@ def set_model():
         return f"<html><body><h3>Model {new_model} not available.</h3><a href='/'>Back</a></body></html>"
 
     current_model = new_model
-    
+
     # Load the new model with current classes
-    print(f"[INFO] Switching to model: YoloE-11{current_model.upper()}")
+    log_to_console(f"Switching to model: YoloE-11{current_model.upper()}")
     model, _ = load_model(current_model, current_classes.split(", "))
-    print(f"[INFO] Model changed to YoloE-11{current_model.upper()}")
-    
+    log_to_console(f"Model changed to YoloE-11{current_model.upper()}")
+
     return '<meta http-equiv="refresh" content="0; url=/" />'
 
 
@@ -836,14 +1012,14 @@ def set_parameters():
     # Validate ranges
     if not (0.0 <= new_conf <= 1.0):
         return "<html><body><h3>Confidence must be between 0.0 and 1.0</h3><a href='/'>Back</a></body></html>"
-    
+
     if not (0.0 <= new_iou <= 1.0):
         return "<html><body><h3>IoU must be between 0.0 and 1.0</h3><a href='/'>Back</a></body></html>"
 
     current_conf = new_conf
     current_iou = new_iou
-    
-    print(f"[INFO] Detection parameters updated: conf={current_conf}, iou={current_iou}")
+
+    log_to_console(f"Detection parameters updated: conf={current_conf}, iou={current_iou}")
     return '<meta http-equiv="refresh" content="0; url=/" />'
 
 
@@ -864,27 +1040,27 @@ def set_classes():
         return "<html><body><h3>Classes cannot be empty.</h3><a href='/'>Back</a></body></html>"
 
     current_classes = new_classes.strip()
-    
+
     # Parse class names from comma-separated string
     class_list = [name.strip() for name in current_classes.split(",") if name.strip()]
-    
+
     if not class_list:
         return "<html><body><h3>Please provide at least one class name.</h3><a href='/'>Back</a></body></html>"
-    
+
     # Switch to text prompting mode
     use_visual_prompt = False
-    
+
     # Delete cached ONNX model to force re-export with new classes
     onnx_model_path = f"yoloe-11{current_model}-seg.onnx"
     if os.path.exists(onnx_model_path):
         os.remove(onnx_model_path)
         print(f"[INFO] Removed cached ONNX model to re-export with new classes")
-    
+
     # Reload the model with new classes
     print(f"[INFO] Updating classes to: {class_list}")
     model, _ = load_model(current_model, class_list)
     print(f"[INFO] Classes updated successfully")
-    
+
     return '<meta http-equiv="refresh" content="0; url=/" />'
 
 
@@ -892,23 +1068,23 @@ def set_classes():
 def capture_snapshot():
     """Capture the current frame as a snapshot."""
     global snapshot_frame
-    
+
     if running:
         return "<html><body><h3>Stop inference first!</h3><a href='/'>Back</a></body></html>"
-    
+
     # Get current frame from camera
     cap = camera_manager.get_camera(current_camera) if camera_manager else cv2.VideoCapture(current_camera)
-    
+
     if cap is None or not cap.isOpened():
         return "<html><body><h3>Could not open camera to capture snapshot.</h3><a href='/'>Back</a></body></html>"
-    
+
     success, frame = cap.read()
     if not success:
         return "<html><body><h3>Failed to capture frame from camera.</h3><a href='/'>Back</a></body></html>"
-    
+
     with lock:
         snapshot_frame = frame.copy()
-    
+
     print(f"[INFO] Snapshot captured")
     return '<meta http-equiv="refresh" content="0; url=/" />'
 
@@ -917,7 +1093,7 @@ def capture_snapshot():
 def snapshot_image():
     """Return the captured snapshot as JPEG."""
     global snapshot_frame
-    
+
     with lock:
         if snapshot_frame is None:
             # Return a blank image if no snapshot
@@ -925,10 +1101,10 @@ def snapshot_image():
             ret, buffer = cv2.imencode('.jpg', blank)
         else:
             ret, buffer = cv2.imencode('.jpg', snapshot_frame)
-    
+
     if not ret:
         return "Error encoding image", 500
-    
+
     return Response(buffer.tobytes(), mimetype='image/jpeg')
 
 
@@ -936,27 +1112,27 @@ def snapshot_image():
 def save_visual_prompt():
     """Save the snapshot with drawn bounding boxes as visual prompt."""
     global snapshot_boxes, use_visual_prompt, model, snapshot_frame, visual_prompt_dict
-    
+
     if running:
         return "<html><body><h3>Stop inference first!</h3><a href='/'>Back</a></body></html>"
-    
+
     if snapshot_frame is None:
         return "<html><body><h3>Please capture a snapshot first.</h3><a href='/'>Back</a></body></html>"
-    
+
     try:
         # Get bounding boxes from request
         boxes_json = request.form.get("boxes", "[]")
         import json
         boxes_data = json.loads(boxes_json)
-        
+
         if not boxes_data:
             return "<html><body><h3>Please draw at least one bounding box.</h3><a href='/'>Back</a></body></html>"
-        
+
         # Convert boxes from relative coordinates to absolute coordinates
         h, w = snapshot_frame.shape[:2]
         print(f"[DEBUG] Snapshot frame shape: {snapshot_frame.shape} (H={h}, W={w})")
         print(f"[DEBUG] Boxes from UI (relative): {boxes_data}")
-        
+
         snapshot_boxes = []
         for box in boxes_data:
             x1 = int(box['x1'] * w)
@@ -964,9 +1140,9 @@ def save_visual_prompt():
             x2 = int(box['x2'] * w)
             y2 = int(box['y2'] * h)
             snapshot_boxes.append([x1, y1, x2, y2])
-        
+
         print(f"[DEBUG] Snapshot boxes (absolute coords): {snapshot_boxes}")
-        
+
         # Create visual prompt dictionary in the format expected by predict()
         # According to implementation inspection:
         # visual_prompts = dict(
@@ -974,48 +1150,48 @@ def save_visual_prompt():
         #     cls=[0, 0, ...]  # List of class IDs (integers 0-based)
         # )
         # The num_cls is calculated from len(set(cls)), so integers are expected
-        
+
         # Convert to list of lists for bboxes (API expects list)
         bboxes_list = [box for box in snapshot_boxes]  # List of [x1, y1, x2, y2]
-        
+
         # Create list of class IDs (all 0 for generic detection)
         cls_list = [0] * len(snapshot_boxes)
-        
+
         visual_prompt_dict = {
             'bboxes': bboxes_list,  # List of boxes
             'cls': cls_list  # List of class IDs (integers)
         }
-        
+
         print(f"[INFO] Created visual prompt dict with {len(snapshot_boxes)} boxes")
         print(f"[DEBUG] Visual prompt bboxes: {visual_prompt_dict['bboxes']}")
         print(f"[DEBUG] Visual prompt cls: {visual_prompt_dict['cls']}")
-        
+
         # Switch to visual prompting mode
         use_visual_prompt = True
-        
+
         # Delete cached ONNX model since we're using PyTorch model for visual prompting
         onnx_model_path = f"yoloe-11{current_model}-seg.onnx"
         if os.path.exists(onnx_model_path):
             os.remove(onnx_model_path)
             print(f"[INFO] Removed cached ONNX model (using PyTorch for visual prompting)")
-        
+
         # Prepare visual prompt data for model loading
         visual_prompt_data = {
             'image': snapshot_frame,
             'boxes': bboxes_list
         }
-        
+
         # Reload the model for visual prompting
         print(f"[INFO] Loading model for visual prompting with {len(snapshot_boxes)} boxes")
         model, success = load_model(current_model, visual_prompt_data=visual_prompt_data)
-        
+
         if success:
             print(f"[INFO] Model loaded successfully for visual prompting")
         else:
             print(f"[WARN] Visual prompt validation failed")
-        
+
         return '<meta http-equiv="refresh" content="0; url=/" />'
-        
+
     except Exception as e:
         print(f"[ERROR] Failed to save visual prompt: {e}")
         print(f"[ERROR] Traceback: {traceback.format_exc()}")
@@ -1026,27 +1202,27 @@ def save_visual_prompt():
 def clear_visual_prompt():
     """Clear visual prompts and return to text prompting mode."""
     global use_visual_prompt, snapshot_frame, snapshot_boxes, model, visual_prompt_dict
-    
+
     if running:
         return "<html><body><h3>Stop inference first!</h3><a href='/'>Back</a></body></html>"
-    
+
     use_visual_prompt = False
     snapshot_frame = None
     snapshot_boxes = []
     visual_prompt_dict = None
-    
+
     # Delete cached ONNX model to force re-export with text prompts
     onnx_model_path = f"yoloe-11{current_model}-seg.onnx"
     if os.path.exists(onnx_model_path):
         os.remove(onnx_model_path)
         print(f"[INFO] Removed cached ONNX model to re-export with text prompts")
-    
+
     # Reload the model with text prompts
     class_list = [name.strip() for name in current_classes.split(",") if name.strip()]
     print(f"[INFO] Returning to text prompting mode with classes: {class_list}")
     model, _ = load_model(current_model, class_list)
     print(f"[INFO] Switched back to text prompting mode")
-    
+
     return '<meta http-equiv="refresh" content="0; url=/" />'
 
 
@@ -1054,45 +1230,45 @@ def clear_visual_prompt():
 def generate_heatmap():
     """Generate a GradCAM heatmap from the current snapshot."""
     global snapshot_frame, last_heatmap_path
-    
+
     if running:
         return "<html><body><h3>Stop inference first!</h3><a href='/'>Back</a></body></html>"
-    
+
     if snapshot_frame is None:
         return "<html><body><h3>Please capture a snapshot first.</h3><a href='/'>Back</a></body></html>"
-    
+
     try:
         # Create heatmaps directory if it doesn't exist
         os.makedirs('heatmaps', exist_ok=True)
-        
+
         # Generate timestamp for unique filename
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         output_path = f'heatmaps/heatmap_{timestamp}.jpg'
-        
+
         # Get model weight path
         weight_path = f"yoloe-11{current_model}-seg.pt"
-        
+
         if not os.path.exists(weight_path):
             return f"<html><body><h3>Model file not found: {weight_path}</h3><a href='/'>Back</a></body></html>"
-        
+
         # Get hardware info for device selection
         hw_info = get_hardware_info()
         device = 'cuda:0' if hw_info['cuda_available'] else 'cpu'
-        
+
         print(f"[INFO] Generating heatmap using device: {device}")
         print(f"[INFO] Model: {weight_path}")
-        
+
         # Get default heatmap parameters
         params = get_default_params()
         params['device'] = device
         params['show_box'] = True  # Show boxes by default
-        
+
         # Create heatmap generator
         heatmap_gen = YoloEHeatmapGenerator(weight_path, **params)
-        
+
         # Generate heatmap
         success = heatmap_gen.generate(snapshot_frame, output_path)
-        
+
         if success:
             last_heatmap_path = output_path
             print(f"[INFO] Heatmap generated successfully: {output_path}")
@@ -1109,7 +1285,7 @@ def generate_heatmap():
             '''
         else:
             return "<html><body><h3>Failed to generate heatmap. Check console for errors.</h3><a href='/'>Back</a></body></html>"
-            
+
     except Exception as e:
         print(f"[ERROR] Failed to generate heatmap: {e}")
         print(f"[ERROR] Traceback: {traceback.format_exc()}")
@@ -1121,56 +1297,79 @@ def generate_heatmap():
 def view_heatmap():
     """View a generated heatmap image."""
     path = request.args.get('path', '')
-    
+
     # Security: Validate path is within heatmaps directory
     if not path:
         return "Heatmap not found", 404
-    
+
     # Normalize and validate path
     try:
         # Get absolute paths
         heatmaps_dir = os.path.abspath('heatmaps')
         requested_path = os.path.abspath(path)
-        
+
         # Ensure the requested path is within heatmaps directory
         if not requested_path.startswith(heatmaps_dir):
             print(f"[SECURITY] Path traversal attempt blocked: {path}")
             return "Access denied", 403
-        
+
         # Check if file exists
         if not os.path.exists(requested_path) or not os.path.isfile(requested_path):
             return "Heatmap not found", 404
-        
+
         return send_file(requested_path, mimetype='image/jpeg')
-        
+
     except Exception as e:
         print(f"[ERROR] Error serving heatmap: {e}")
         return "Error loading heatmap", 500
+
+
+@app.route('/console_output')
+def console_output():
+    """Return the console log buffer as plain text."""
+    global console_log_buffer
+
+    with console_log_lock:
+        if not console_log_buffer:
+            return "No console output yet. Start inference to see logs.", 200, {
+                'Content-Type': 'text/plain; charset=utf-8'}
+
+        # Escape HTML entities for defense in depth, even though we return as plain text
+        # This prevents any potential XSS if the content-type is somehow changed
+        safe_buffer = [escape(line) for line in console_log_buffer]
+        return "\n".join(safe_buffer), 200, {'Content-Type': 'text/plain; charset=utf-8'}
 
 
 # -------------------------------
 # 🏁 Main Entry
 # -------------------------------
 if __name__ == '__main__':
+    # Initialize logging
+    log_to_console("YoloE Web Service Starting...")
+    log_to_console("Initializing camera manager...")
+
     # Initialize camera manager
     camera_manager = CameraManager(max_devices=10)
     camera_manager.start()
 
     # Detect available cameras using the camera manager
-    print("[INFO] Scanning for available cameras...")
+    log_to_console("Scanning for available cameras...")
     time.sleep(5)  # Give manager time for initial detection
     available_cameras = camera_manager.get_available_cameras()
 
     if not available_cameras:
-        print("[ERROR] No cameras detected!")
+        log_to_console("ERROR: No cameras detected!")
         camera_manager.stop()
         exit(1)
 
-    print(f"[INFO] Found cameras: {available_cameras}")
+    log_to_console(f"Found cameras: {available_cameras}")
     current_camera = available_cameras[0]
 
     # Pre-open the default camera in background
     camera_manager.request_pre_open(current_camera)
+
+    log_to_console("Starting Flask web server on http://127.0.0.1:8080")
+    log_to_console("Ready to accept requests!")
 
     try:
         app.run(host='127.0.0.1', port=8080, debug=False, threaded=True)

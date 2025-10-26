@@ -264,6 +264,7 @@ def inference_thread():
                 img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 img_float = np.float32(img_rgb) / 255.0
                 tensor = torch.from_numpy(np.transpose(img_float, axes=[2, 0, 1])).unsqueeze(0).to(heatmap_generator.device)
+                tensor.requires_grad_(True)
 
                 # Generate GradCAM
                 try:

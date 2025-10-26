@@ -1,4 +1,4 @@
-from flask import Flask, Response, request, send_file
+from flask import Flask, Response, request, send_file, escape
 from ultralytics import YOLOE
 import cv2, threading, time, platform, os
 import numpy as np
@@ -1321,9 +1321,12 @@ def console_output():
     
     with console_log_lock:
         if not console_log_buffer:
-            return "No console output yet. Start inference to see logs."
+            return "No console output yet. Start inference to see logs.", 200, {'Content-Type': 'text/plain; charset=utf-8'}
         
-        return "\n".join(console_log_buffer)
+        # Escape HTML entities for defense in depth, even though we return as plain text
+        # This prevents any potential XSS if the content-type is somehow changed
+        safe_buffer = [escape(line) for line in console_log_buffer]
+        return "\n".join(safe_buffer), 200, {'Content-Type': 'text/plain; charset=utf-8'}
 
 
 # -------------------------------

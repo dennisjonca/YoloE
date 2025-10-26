@@ -26,6 +26,9 @@ current_classes = "person, plant"  # Default class prompts
 current_conf = 0.25  # Default confidence threshold (0.0 - 1.0)
 current_iou = 0.45  # Default IoU threshold for NMS (0.0 - 1.0)
 
+# Performance optimization: use half-precision (FP16) on CUDA GPUs
+use_half_precision = False  # Will be auto-enabled for CUDA GPUs
+
 
 def get_hardware_info():
     """Get information about available hardware for inference."""
@@ -57,6 +60,8 @@ def load_model(model_size, class_names=None, visual_prompt_data=None):
         tuple: (model, success) where success is True if visual prompts were validated successfully,
                or True if text prompts were used (no visual prompts requested)
     """
+    global use_half_precision
+    
     if class_names is None:
         class_names = ["person", "plant"]
 
@@ -65,6 +70,13 @@ def load_model(model_size, class_names=None, visual_prompt_data=None):
     pt_model_path = f"yoloe-11{model_size}-seg.pt"
 
     visual_prompt_success = True  # Track if visual prompts were validated successfully
+    
+    # Enable half-precision for CUDA GPUs (faster inference)
+    if torch.cuda.is_available():
+        use_half_precision = True
+        print(f"[INFO] CUDA detected - enabling half-precision (FP16) for faster inference")
+    else:
+        use_half_precision = False
 
     # For visual prompting, we need to use PyTorch model, not ONNX
     # because visual prompts are passed per-frame to predict()
@@ -310,6 +322,7 @@ def inference_thread():
                 results = heatmap_generator.yolo_model.predict(
                     source=frame,
                     conf=current_conf,
+                    half=use_half_precision,
                     verbose=False,
                     show=False
                 )
@@ -353,13 +366,15 @@ def inference_thread():
                 visual_prompts=visual_prompt_dict,
                 predictor=YOLOEVPSegPredictor,
                 conf=current_conf,
+                half=use_half_precision,
                 show=False,
                 verbose=False
             )
 
             # Process results (predict returns a list, not a generator)
             for result in results:
-                frame = result.orig_img.copy()
+                # Reuse the frame from result instead of copying
+                frame = result.orig_img
                 boxes = result.boxes.xyxy.cpu().numpy().astype(int)
                 names = result.names
                 detections_found = len(boxes)
@@ -372,8 +387,9 @@ def inference_thread():
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
         else:
             # Text prompting mode: use track() for continuous tracking
-            for result in model.track(source=frame, conf=current_conf, iou=current_iou, show=False, persist=True):
-                frame = result.orig_img.copy()
+            for result in model.track(source=frame, conf=current_conf, iou=current_iou, half=use_half_precision, show=False, persist=True):
+                # Reuse the frame from result instead of copying
+                frame = result.orig_img
                 boxes = result.boxes.xyxy.cpu().numpy().astype(int)
                 names = result.names
                 detections_found = len(boxes)
@@ -396,21 +412,21 @@ def inference_thread():
 
         detection_count = detections_found
 
-        # Add performance overlay
+        # Add performance overlay (optimized string formatting)
         mode_indicator = "HEATMAP" if heatmap_mode else "NORMAL"
-        perf_text = f"[{mode_indicator}] FPS: {current_fps:.1f} | Inference: {inference_time * 1000:.1f}ms | Detections: {detection_count}"
+        # Use format for better performance than f-strings in tight loops
+        perf_text = "[{}] FPS: {:.1f} | Inference: {:.1f}ms | Detections: {}".format(
+            mode_indicator, current_fps, inference_time * 1000, detection_count)
         cv2.putText(frame, perf_text, (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2, cv2.LINE_AA)
 
         # Add parameter info
-        param_text = f"Conf: {current_conf:.2f} | IoU: {current_iou:.2f}"
+        param_text = "Conf: {:.2f} | IoU: {:.2f}".format(current_conf, current_iou)
         cv2.putText(frame, param_text, (10, 60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2, cv2.LINE_AA)
 
         with lock:
-            latest_frame = frame.copy()
-
-        time.sleep(0.001)
+            latest_frame = frame
 
     if cap is not None:
         cap.release()
@@ -424,18 +440,27 @@ def inference_thread():
 def gen_frames():
     """Continuously yields the latest frame for Flask MJPEG stream."""
     global latest_frame
+    # Optimize JPEG encoding quality for faster encoding (85 is a good balance)
+    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 85]
+    frame_skip_counter = 0
     while True:
+        # Skip frames to reduce lock contention (stream every other frame)
+        frame_skip_counter += 1
+        if frame_skip_counter % 2 != 0:
+            time.sleep(0.005)
+            continue
+            
         with lock:
             if latest_frame is None:
                 continue
             frame = latest_frame.copy()
 
-        ret, buffer = cv2.imencode('.jpg', frame)
+        ret, buffer = cv2.imencode('.jpg', frame, encode_param)
         if not ret:
             continue
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-        time.sleep(0.01)
+        time.sleep(0.005)
 
 
 # -------------------------------

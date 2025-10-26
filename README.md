@@ -305,7 +305,8 @@ The application now includes configurable detection parameters to optimize track
 
 ## Documentation
 
-- [LIVE_HEATMAP_MODE.md](LIVE_HEATMAP_MODE.md) - **NEW!** Real-time heatmap visualization feature
+- [PERFORMANCE_OPTIMIZATIONS.md](PERFORMANCE_OPTIMIZATIONS.md) - **NEW!** Performance improvements for faster inference FPS
+- [LIVE_HEATMAP_MODE.md](LIVE_HEATMAP_MODE.md) - Real-time heatmap visualization feature
 - [HEATMAP_FEATURE.md](HEATMAP_FEATURE.md) - Snapshot-based heatmap generation documentation
 - [PERFORMANCE_GUIDE.md](PERFORMANCE_GUIDE.md) - Complete guide to detection parameters, hardware, and troubleshooting
 - [VISUAL_PROMPTING_FEATURE.md](VISUAL_PROMPTING_FEATURE.md) - Visual prompting feature documentation

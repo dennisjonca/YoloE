@@ -1,4 +1,8 @@
-from flask import Flask, Response, request, send_file, escape
+from flask import Flask, Response, request, send_file
+try:
+    from flask import escape
+except ImportError:
+    from markupsafe import escape
 from ultralytics import YOLOE
 import cv2, threading, time, platform, os
 import numpy as np

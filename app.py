@@ -271,7 +271,6 @@ def inference_thread():
                     grayscale_cam = grayscale_cam[0, :]
                 except Exception as e:
                     print(f"[WARN] GradCAM generation failed: {e}, using fallback")
-                    import traceback
                     traceback.print_exc()
                     # Fallback: create a zero heatmap that will be filled by detected regions
                     grayscale_cam = np.zeros(img_float.shape[:2], dtype=np.float32)

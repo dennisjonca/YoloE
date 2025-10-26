@@ -10,6 +10,7 @@ warnings.simplefilter('ignore')
 import torch
 import cv2
 import os
+import traceback
 import numpy as np
 from PIL import Image
 from tqdm import trange
@@ -71,7 +72,7 @@ class YoloTarget(torch.nn.Module):
         Compute target for gradient backpropagation.
         
         For YOLO models, we want to focus on high-confidence detections, not all outputs.
-        This is achieved by using max() or top-k values instead of sum(), which creates
+        This is achieved by using top-k values instead of sum(), which creates
         stronger, more focused gradients that produce visible "hot" areas in the heatmap.
         
         Args:
@@ -84,18 +85,10 @@ class YoloTarget(torch.nn.Module):
             data = data[0] if len(data) > 0 else data
         
         if torch.is_tensor(data):
-            # Use maximum values to focus on strong detections
-            # This creates focused gradients that highlight detected objects
-            # Alternative: use top-k values for even stronger focus
-            # For example: torch.topk(data.flatten(), k=min(100, data.numel())).values.sum()
-            
-            # Strategy 1: Use max values (simple and effective)
-            # return data.max()
-            
-            # Strategy 2: Use top-k sum (more robust for multiple detections)
+            # Use top-k sum to focus on strong detections
             # Take top 1% of activations or at least 50 values
             k = max(50, int(data.numel() * 0.01))
-            k = min(k, data.numel())  # Ensure k doesn't exceed number of elements
+            k = min(k, data.numel())
             
             if data.numel() > 0:
                 top_values = torch.topk(data.flatten(), k=k).values
@@ -214,7 +207,6 @@ class YoloEHeatmapGenerator:
                 grayscale_cam = grayscale_cam[0, :]
             except Exception as e:
                 print(f"[WARN] GradCAM generation failed: {e}, using simple approach")
-                import traceback
                 traceback.print_exc()
                 # Fallback: create a uniform heatmap that will be filled by detections
                 # Using zeros so that renormalization will highlight detected regions

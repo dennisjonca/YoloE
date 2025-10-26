@@ -9,6 +9,9 @@ import torch
 import numpy as np
 from heatmap_generator import YoloTarget
 
+# Test constants
+GRADIENT_FOCUS_THRESHOLD = 0.5  # Minimum ratio for gradient focus on high-activation regions
+
 def test_yolo_target_improvement():
     """Test that YoloTarget uses top-k strategy instead of sum."""
     print("=" * 60)
@@ -79,7 +82,7 @@ def test_yolo_target_improvement():
     print(f"   - High activation region gradient: {high_activation_region_grad.item():.6f}")
     print(f"   - Background region gradient: {background_region_grad.item():.6f}")
     
-    if high_activation_region_grad > background_region_grad * 0.5:
+    if high_activation_region_grad > background_region_grad * GRADIENT_FOCUS_THRESHOLD:
         print("   ✓ Gradients are more focused on high-activation regions")
     else:
         print("   ⚠ Gradients may not be optimally focused")

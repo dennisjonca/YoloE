@@ -200,6 +200,7 @@ class YoloEHeatmapGenerator:
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             img_float = np.float32(img) / 255.0
             tensor = torch.from_numpy(np.transpose(img_float, axes=[2, 0, 1])).unsqueeze(0).to(self.device)
+            tensor.requires_grad_(True)
 
             # Generate GradCAM
             try:

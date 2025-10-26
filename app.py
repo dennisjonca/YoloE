@@ -562,7 +562,6 @@ def index():
                 <h3>Prompt Mode: {prompt_mode}</h3>
                 <h3>Heatmap Mode: {"ON" if heatmap_mode else "OFF"}</h3>
                 {"<h3>Current Classes: " + current_classes + "</h3>" if not use_visual_prompt else "<h3>Visual Prompts Active: " + str(len(snapshot_boxes)) + " boxes</h3>"}
-                {f"<h3>Performance: {current_fps:.1f} FPS | {inference_time * 1000:.1f}ms inference | {detection_count} detections</h3>" if running else ""}
 
                 <form action="/start" method="post" style="display:inline;">
                     <input type="submit" value="Start Inference" {"disabled" if running else ""} class="button">

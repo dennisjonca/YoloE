@@ -156,17 +156,19 @@ detection_count = 0
 
 # Console log buffer
 console_log_buffer = []
+console_log_lock = threading.Lock()  # Lock for thread-safe access to console buffer
 max_console_lines = 500
 
 def log_to_console(message):
     """Add a message to the console log buffer."""
     global console_log_buffer
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     log_entry = f"[{timestamp}] {message}"
-    console_log_buffer.append(log_entry)
-    # Keep only the last max_console_lines
-    if len(console_log_buffer) > max_console_lines:
-        console_log_buffer = console_log_buffer[-max_console_lines:]
+    with console_log_lock:
+        console_log_buffer.append(log_entry)
+        # Keep only the last max_console_lines
+        if len(console_log_buffer) > max_console_lines:
+            console_log_buffer = console_log_buffer[-max_console_lines:]
     print(log_entry)  # Also print to actual console
 
 
@@ -687,8 +689,13 @@ def index():
                 // Show selected tab content
                 document.getElementById(tabId).classList.add('active');
                 
-                // Add active class to clicked tab
-                event.target.classList.add('active');
+                // Add active class to clicked tab by finding the one with matching onclick
+                const clickedTab = Array.from(tabs).find(tab => 
+                    tab.getAttribute('onclick') === `switchTab('${{tabId}}')`
+                );
+                if (clickedTab) {{
+                    clickedTab.classList.add('active');
+                }}
                 
                 // Start console refresh if on tab 4
                 if (tabId === 'tab4') {{
@@ -740,7 +747,8 @@ def index():
             }}
             
             function clearConsoleDisplay() {{
-                document.getElementById('consoleOutput').textContent = 'Console cleared (display only - server logs unchanged)';
+                const timestamp = new Date().toISOString().substring(0, 19).replace('T', ' ');
+                document.getElementById('consoleOutput').textContent = `[${{timestamp}}] Console display cleared (server logs unchanged)`;
             }}
             
             // Load snapshot image
@@ -1311,10 +1319,11 @@ def console_output():
     """Return the console log buffer as plain text."""
     global console_log_buffer
     
-    if not console_log_buffer:
-        return "No console output yet. Start inference to see logs."
-    
-    return "\n".join(console_log_buffer)
+    with console_log_lock:
+        if not console_log_buffer:
+            return "No console output yet. Start inference to see logs."
+        
+        return "\n".join(console_log_buffer)
 
 
 # -------------------------------

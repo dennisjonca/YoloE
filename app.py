@@ -154,6 +154,21 @@ current_fps = 0.0
 inference_time = 0.0
 detection_count = 0
 
+# Console log buffer
+console_log_buffer = []
+max_console_lines = 500
+
+def log_to_console(message):
+    """Add a message to the console log buffer."""
+    global console_log_buffer
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    log_entry = f"[{timestamp}] {message}"
+    console_log_buffer.append(log_entry)
+    # Keep only the last max_console_lines
+    if len(console_log_buffer) > max_console_lines:
+        console_log_buffer = console_log_buffer[-max_console_lines:]
+    print(log_entry)  # Also print to actual console
+
 
 # -------------------------------
 # 🔍 Camera Detection Utility (Deprecated - Now handled by CameraManager)
@@ -188,12 +203,12 @@ def inference_thread():
     global use_visual_prompt, visual_prompt_dict, heatmap_mode, heatmap_generator
 
     thread_alive = True
-    print(f"[INFO] Starting inference on camera {current_camera}")
-    print(f"[INFO] Detection parameters: conf={current_conf}, iou={current_iou}")
+    log_to_console(f"Starting inference on camera {current_camera}")
+    log_to_console(f"Detection parameters: conf={current_conf}, iou={current_iou}")
     
     # Initialize heatmap generator if in heatmap mode
     if heatmap_mode:
-        print(f"[INFO] Initializing heatmap mode")
+        log_to_console("Initializing heatmap mode")
         try:
             weight_path = f"yoloe-11{current_model}-seg.pt"
             hw_info = get_hardware_info()
@@ -205,32 +220,32 @@ def inference_thread():
             params['renormalize'] = True
             
             heatmap_generator = YoloEHeatmapGenerator(weight_path, **params)
-            print(f"[INFO] Heatmap generator initialized for live mode")
+            log_to_console("Heatmap generator initialized for live mode")
         except Exception as e:
-            print(f"[ERROR] Failed to initialize heatmap generator: {e}")
-            print(f"[WARN] Falling back to normal mode")
+            log_to_console(f"Failed to initialize heatmap generator: {e}")
+            log_to_console("Falling back to normal mode")
             heatmap_mode = False
             heatmap_generator = None
     
     if use_visual_prompt:
-        print(f"[INFO] Using visual prompting mode")
+        log_to_console("Using visual prompting mode")
         from ultralytics.models.yolo.yoloe import YOLOEVPSegPredictor
     else:
-        print(f"[INFO] Using text prompting mode")
+        log_to_console("Using text prompting mode")
         # Reset tracker state to avoid tracking issues when switching cameras
         try:
             if hasattr(model, 'predictor') and model.predictor is not None:
                 if hasattr(model.predictor, 'trackers') and model.predictor.trackers:
                     model.predictor.trackers[0].reset()
-                    print(f"[INFO] Tracker reset for camera {current_camera}")
+                    log_to_console(f"Tracker reset for camera {current_camera}")
         except Exception as e:
-            print(f"[WARN] Could not reset tracker: {e}")
+            log_to_console(f"Could not reset tracker: {e}")
 
     # Get camera from manager (pre-opened if available)
     cap = camera_manager.get_camera(current_camera) if camera_manager else cv2.VideoCapture(current_camera)
 
     if cap is None or not cap.isOpened():
-        print(f"[ERROR] Could not open camera {current_camera}")
+        log_to_console(f"Could not open camera {current_camera}")
         thread_alive = False
         return
 
@@ -242,7 +257,7 @@ def inference_thread():
     while running:
         success, frame = cap.read()
         if not success:
-            print(f"[WARN] Camera {current_camera} read() failed, retrying...")
+            log_to_console(f"Camera {current_camera} read() failed, retrying...")
             time.sleep(2)
             continue
 
@@ -388,7 +403,7 @@ def inference_thread():
     if cap is not None:
         cap.release()
     thread_alive = False
-    print(f"[INFO] Stopped inference on camera {current_camera}")
+    log_to_console(f"Stopped inference on camera {current_camera}")
 
 
 # -------------------------------
@@ -468,113 +483,185 @@ def index():
                     opacity: 0.5;
                     cursor: not-allowed;
                 }}
+                
+                /* Tab styling */
+                .tabs {{
+                    display: flex;
+                    border-bottom: 2px solid #ccc;
+                    margin-bottom: 20px;
+                }}
+                .tab {{
+                    padding: 12px 24px;
+                    cursor: pointer;
+                    background-color: #f0f0f0;
+                    border: 1px solid #ccc;
+                    border-bottom: none;
+                    margin-right: 5px;
+                    border-radius: 5px 5px 0 0;
+                    transition: background-color 0.3s;
+                }}
+                .tab:hover {{
+                    background-color: #e0e0e0;
+                }}
+                .tab.active {{
+                    background-color: white;
+                    font-weight: bold;
+                    border-bottom: 2px solid white;
+                    margin-bottom: -2px;
+                }}
+                .tab-content {{
+                    display: none;
+                }}
+                .tab-content.active {{
+                    display: block;
+                }}
+                #consoleOutput {{
+                    background-color: #1e1e1e;
+                    color: #00ff00;
+                    font-family: 'Courier New', monospace;
+                    padding: 15px;
+                    border-radius: 5px;
+                    max-height: 500px;
+                    overflow-y: auto;
+                    white-space: pre-wrap;
+                    word-wrap: break-word;
+                }}
             </style>
         </head>
         <body>
         <h1>YOLO Stream with Live Inference</h1>
         
-        <div class="section">
-            <h2>Status & Controls</h2>
-            <h3>Status: {status}</h3>
-            <h3>Hardware: {hardware_status}</h3>
-            <h3>Current Model: YoloE-11{current_model.upper()}</h3>
-            <h3>Prompt Mode: {prompt_mode}</h3>
-            <h3>Heatmap Mode: {"ON" if heatmap_mode else "OFF"}</h3>
-            {"<h3>Current Classes: " + current_classes + "</h3>" if not use_visual_prompt else "<h3>Visual Prompts Active: " + str(len(snapshot_boxes)) + " boxes</h3>"}
-            {f"<h3>Performance: {current_fps:.1f} FPS | {inference_time*1000:.1f}ms inference | {detection_count} detections</h3>" if running else ""}
-            
-            <form action="/start" method="post" style="display:inline;">
-                <input type="submit" value="Start Inference" {"disabled" if running else ""} class="button">
-            </form>
-            <form action="/stop" method="post" style="display:inline;">
-                <input type="submit" value="Stop Inference" {"disabled" if not running else ""} class="button">
-            </form>
-            <form action="/toggle_heatmap" method="post" style="display:inline;">
-                <input type="submit" value="{"Disable" if heatmap_mode else "Enable"} Heatmap Mode" {"disabled" if running else ""} class="button">
-            </form>
+        <!-- Tab Navigation -->
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('tab1')">Status & Live Feed</div>
+            <div class="tab" onclick="switchTab('tab2')">Configuration & Parameters</div>
+            <div class="tab" onclick="switchTab('tab3')">Prompting</div>
+            <div class="tab" onclick="switchTab('tab4')">Console Output</div>
         </div>
         
-        <div class="section">
-            <h2>Configuration</h2>
-            <form action="/set_camera" method="post">
-                <label for="camera">Select Camera:</label>
-                <select name="camera" id="camera" {"disabled" if running else ""}>
-                    {camera_options_html}
-                </select>
-                <input type="submit" value="Switch Camera" {"disabled" if running else ""} class="button">
-            </form>
-            <br><br>
-            <form action="/set_model" method="post">
-                <label for="model">Select Model:</label>
-                <select name="model" id="model" {"disabled" if running else ""}>
-                    {model_options_html}
-                </select>
-                <input type="submit" value="Switch Model" {"disabled" if running else ""} class="button">
-            </form>
-        </div>
-        
-        <div class="section">
-            <h2>Detection Parameters</h2>
-            <p>Adjust these parameters to improve detection performance. Lower confidence detects more objects but may include false positives.</p>
-            <form action="/set_parameters" method="post">
-                <label for="conf">Confidence Threshold (0.0 - 1.0):</label>
-                <input type="number" name="conf" id="conf" value="{current_conf}" min="0.0" max="1.0" step="0.05" {"disabled" if running else ""}><br><br>
+        <!-- Tab 1: Status & Live Feed -->
+        <div id="tab1" class="tab-content active">
+            <div class="section">
+                <h2>Status & Controls</h2>
+                <h3>Status: {status}</h3>
+                <h3>Hardware: {hardware_status}</h3>
+                <h3>Current Model: YoloE-11{current_model.upper()}</h3>
+                <h3>Prompt Mode: {prompt_mode}</h3>
+                <h3>Heatmap Mode: {"ON" if heatmap_mode else "OFF"}</h3>
+                {"<h3>Current Classes: " + current_classes + "</h3>" if not use_visual_prompt else "<h3>Visual Prompts Active: " + str(len(snapshot_boxes)) + " boxes</h3>"}
+                {f"<h3>Performance: {current_fps:.1f} FPS | {inference_time*1000:.1f}ms inference | {detection_count} detections</h3>" if running else ""}
                 
-                <label for="iou">IoU Threshold (0.0 - 1.0):</label>
-                <input type="number" name="iou" id="iou" value="{current_iou}" min="0.0" max="1.0" step="0.05" {"disabled" if running else ""}><br><br>
-                
-                <input type="submit" value="Update Parameters" {"disabled" if running else ""} class="button">
-            </form>
-            <p style="font-size: 0.9em; color: #666;">
-                <strong>Tips:</strong><br>
-                • Confidence 0.15-0.25: More detections, may include false positives<br>
-                • Confidence 0.25-0.40: Balanced (recommended for most cases)<br>
-                • Confidence 0.40-0.60: High confidence, fewer false positives<br>
-                • IoU 0.40-0.50: More lenient overlap detection<br>
-                • IoU 0.50-0.60: Standard overlap detection
-            </p>
-        </div>
-        
-        <div class="section">
-            <h2>Text Prompting</h2>
-            <form action="/set_classes" method="post">
-                <label for="classes">Custom Classes (comma-separated):</label>
-                <input type="text" name="classes" id="classes" value="{current_classes}" size="50" {"disabled" if running else ""}>
-                <input type="submit" value="Update Classes" {"disabled" if running else ""} class="button">
-            </form>
-        </div>
-        
-        <div class="section">
-            <h2>Visual Prompting & Heatmap Generation</h2>
-            <p>Capture a snapshot from the camera and either draw bounding boxes for tracking or generate a heatmap to visualize what the model "sees".</p>
-            
-            <form action="/capture_snapshot" method="post" style="display:inline;">
-                <input type="submit" value="Capture Snapshot" {"disabled" if running else ""} class="button">
-            </form>
-            
-            <button onclick="clearBoxes()" {"disabled" if running or not has_snapshot else ""} class="button">Clear Boxes</button>
-            <button onclick="saveVisualPrompt()" {"disabled" if running or not has_snapshot else ""} class="button">Save Snapshot with Boxes</button>
-            
-            <form action="/clear_visual_prompt" method="post" style="display:inline;">
-                <input type="submit" value="Clear Visual Prompt" {"disabled" if running or not use_visual_prompt else ""} class="button">
-            </form>
-            
-            <form action="/generate_heatmap" method="post" style="display:inline;">
-                <input type="submit" value="Generate Heatmap" {"disabled" if running or not has_snapshot else ""} class="button" title="Generate a heatmap showing what the model focuses on">
-            </form>
-            
-            <br><br>
-            
-            <div class="canvas-container">
-                <canvas id="snapshotCanvas" width="640" height="480"></canvas>
+                <form action="/start" method="post" style="display:inline;">
+                    <input type="submit" value="Start Inference" {"disabled" if running else ""} class="button">
+                </form>
+                <form action="/stop" method="post" style="display:inline;">
+                    <input type="submit" value="Stop Inference" {"disabled" if not running else ""} class="button">
+                </form>
+                <form action="/toggle_heatmap" method="post" style="display:inline;">
+                    <input type="submit" value="{"Disable" if heatmap_mode else "Enable"} Heatmap Mode" {"disabled" if running else ""} class="button">
+                </form>
             </div>
             
-            <p id="boxInfo">No boxes drawn</p>
+            <div class="section">
+                <h2>Live Feed</h2>
+                <img src="/video_feed" width="640" height="480">
+            </div>
         </div>
         
-        <div class="section">
-            <h2>Live Feed</h2>
-            <img src="/video_feed" width="640" height="480">
+        <!-- Tab 2: Configuration & Detection Parameters -->
+        <div id="tab2" class="tab-content">
+            <div class="section">
+                <h2>Configuration</h2>
+                <form action="/set_camera" method="post">
+                    <label for="camera">Select Camera:</label>
+                    <select name="camera" id="camera" {"disabled" if running else ""}>
+                        {camera_options_html}
+                    </select>
+                    <input type="submit" value="Switch Camera" {"disabled" if running else ""} class="button">
+                </form>
+                <br><br>
+                <form action="/set_model" method="post">
+                    <label for="model">Select Model:</label>
+                    <select name="model" id="model" {"disabled" if running else ""}>
+                        {model_options_html}
+                    </select>
+                    <input type="submit" value="Switch Model" {"disabled" if running else ""} class="button">
+                </form>
+            </div>
+            
+            <div class="section">
+                <h2>Detection Parameters</h2>
+                <p>Adjust these parameters to improve detection performance. Lower confidence detects more objects but may include false positives.</p>
+                <form action="/set_parameters" method="post">
+                    <label for="conf">Confidence Threshold (0.0 - 1.0):</label>
+                    <input type="number" name="conf" id="conf" value="{current_conf}" min="0.0" max="1.0" step="0.05" {"disabled" if running else ""}><br><br>
+                    
+                    <label for="iou">IoU Threshold (0.0 - 1.0):</label>
+                    <input type="number" name="iou" id="iou" value="{current_iou}" min="0.0" max="1.0" step="0.05" {"disabled" if running else ""}><br><br>
+                    
+                    <input type="submit" value="Update Parameters" {"disabled" if running else ""} class="button">
+                </form>
+                <p style="font-size: 0.9em; color: #666;">
+                    <strong>Tips:</strong><br>
+                    • Confidence 0.15-0.25: More detections, may include false positives<br>
+                    • Confidence 0.25-0.40: Balanced (recommended for most cases)<br>
+                    • Confidence 0.40-0.60: High confidence, fewer false positives<br>
+                    • IoU 0.40-0.50: More lenient overlap detection<br>
+                    • IoU 0.50-0.60: Standard overlap detection
+                </p>
+            </div>
+        </div>
+        
+        <!-- Tab 3: Text and Visual Prompting -->
+        <div id="tab3" class="tab-content">
+            <div class="section">
+                <h2>Text Prompting</h2>
+                <form action="/set_classes" method="post">
+                    <label for="classes">Custom Classes (comma-separated):</label>
+                    <input type="text" name="classes" id="classes" value="{current_classes}" size="50" {"disabled" if running else ""}>
+                    <input type="submit" value="Update Classes" {"disabled" if running else ""} class="button">
+                </form>
+            </div>
+            
+            <div class="section">
+                <h2>Visual Prompting & Heatmap Generation</h2>
+                <p>Capture a snapshot from the camera and either draw bounding boxes for tracking or generate a heatmap to visualize what the model "sees".</p>
+                
+                <form action="/capture_snapshot" method="post" style="display:inline;">
+                    <input type="submit" value="Capture Snapshot" {"disabled" if running else ""} class="button">
+                </form>
+                
+                <button onclick="clearBoxes()" {"disabled" if running or not has_snapshot else ""} class="button">Clear Boxes</button>
+                <button onclick="saveVisualPrompt()" {"disabled" if running or not has_snapshot else ""} class="button">Save Snapshot with Boxes</button>
+                
+                <form action="/clear_visual_prompt" method="post" style="display:inline;">
+                    <input type="submit" value="Clear Visual Prompt" {"disabled" if running or not use_visual_prompt else ""} class="button">
+                </form>
+                
+                <form action="/generate_heatmap" method="post" style="display:inline;">
+                    <input type="submit" value="Generate Heatmap" {"disabled" if running or not has_snapshot else ""} class="button" title="Generate a heatmap showing what the model focuses on">
+                </form>
+                
+                <br><br>
+                
+                <div class="canvas-container">
+                    <canvas id="snapshotCanvas" width="640" height="480"></canvas>
+                </div>
+                
+                <p id="boxInfo">No boxes drawn</p>
+            </div>
+        </div>
+        
+        <!-- Tab 4: Console Output -->
+        <div id="tab4" class="tab-content">
+            <div class="section">
+                <h2>Console Output</h2>
+                <p>View the application logs and status messages below. This updates every 5 seconds.</p>
+                <button onclick="refreshConsole()" class="button">Refresh Now</button>
+                <button onclick="toggleAutoRefresh()" class="button" id="autoRefreshBtn">Auto-Refresh: ON</button>
+                <button onclick="clearConsoleDisplay()" class="button">Clear Display</button>
+                <div id="consoleOutput">Loading console output...</div>
+            </div>
         </div>
         
         <script>
@@ -584,6 +671,77 @@ def index():
             let isDrawing = false;
             let startX, startY;
             let snapshotLoaded = {str(has_snapshot).lower()};
+            let autoRefreshEnabled = true;
+            let consoleRefreshInterval = null;
+            
+            // Tab switching function
+            function switchTab(tabId) {{
+                // Hide all tab contents
+                const tabContents = document.querySelectorAll('.tab-content');
+                tabContents.forEach(content => content.classList.remove('active'));
+                
+                // Remove active class from all tabs
+                const tabs = document.querySelectorAll('.tab');
+                tabs.forEach(tab => tab.classList.remove('active'));
+                
+                // Show selected tab content
+                document.getElementById(tabId).classList.add('active');
+                
+                // Add active class to clicked tab
+                event.target.classList.add('active');
+                
+                // Start console refresh if on tab 4
+                if (tabId === 'tab4') {{
+                    startConsoleRefresh();
+                }} else {{
+                    stopConsoleRefresh();
+                }}
+            }}
+            
+            // Console output functions
+            function refreshConsole() {{
+                fetch('/console_output')
+                    .then(response => response.text())
+                    .then(data => {{
+                        document.getElementById('consoleOutput').textContent = data;
+                        // Auto-scroll to bottom
+                        const consoleDiv = document.getElementById('consoleOutput');
+                        consoleDiv.scrollTop = consoleDiv.scrollHeight;
+                    }})
+                    .catch(error => {{
+                        console.error('Error fetching console output:', error);
+                    }});
+            }}
+            
+            function startConsoleRefresh() {{
+                if (autoRefreshEnabled && !consoleRefreshInterval) {{
+                    refreshConsole(); // Initial load
+                    consoleRefreshInterval = setInterval(refreshConsole, 5000);
+                }}
+            }}
+            
+            function stopConsoleRefresh() {{
+                if (consoleRefreshInterval) {{
+                    clearInterval(consoleRefreshInterval);
+                    consoleRefreshInterval = null;
+                }}
+            }}
+            
+            function toggleAutoRefresh() {{
+                autoRefreshEnabled = !autoRefreshEnabled;
+                const btn = document.getElementById('autoRefreshBtn');
+                btn.textContent = 'Auto-Refresh: ' + (autoRefreshEnabled ? 'ON' : 'OFF');
+                
+                if (autoRefreshEnabled) {{
+                    startConsoleRefresh();
+                }} else {{
+                    stopConsoleRefresh();
+                }}
+            }}
+            
+            function clearConsoleDisplay() {{
+                document.getElementById('consoleOutput').textContent = 'Console cleared (display only - server logs unchanged)';
+            }}
             
             // Load snapshot image
             function loadSnapshot() {{
@@ -754,7 +912,7 @@ def toggle_heatmap():
     
     heatmap_mode = not heatmap_mode
     mode_str = "ON" if heatmap_mode else "OFF"
-    print(f"[INFO] Heatmap mode toggled: {mode_str}")
+    log_to_console(f"Heatmap mode toggled: {mode_str}")
     
     return '<meta http-equiv="refresh" content="0; url=/" />'
 
@@ -789,7 +947,7 @@ def set_camera():
     if camera_manager:
         camera_manager.request_pre_open(new_cam)
 
-    print(f"[INFO] Camera changed to {current_camera}")
+    log_to_console(f"Camera changed to {current_camera}")
     return '<meta http-equiv="refresh" content="0; url=/" />'
 
 
@@ -812,9 +970,9 @@ def set_model():
     current_model = new_model
     
     # Load the new model with current classes
-    print(f"[INFO] Switching to model: YoloE-11{current_model.upper()}")
+    log_to_console(f"Switching to model: YoloE-11{current_model.upper()}")
     model, _ = load_model(current_model, current_classes.split(", "))
-    print(f"[INFO] Model changed to YoloE-11{current_model.upper()}")
+    log_to_console(f"Model changed to YoloE-11{current_model.upper()}")
     
     return '<meta http-equiv="refresh" content="0; url=/" />'
 
@@ -843,7 +1001,7 @@ def set_parameters():
     current_conf = new_conf
     current_iou = new_iou
     
-    print(f"[INFO] Detection parameters updated: conf={current_conf}, iou={current_iou}")
+    log_to_console(f"Detection parameters updated: conf={current_conf}, iou={current_iou}")
     return '<meta http-equiv="refresh" content="0; url=/" />'
 
 
@@ -1148,30 +1306,48 @@ def view_heatmap():
         return "Error loading heatmap", 500
 
 
+@app.route('/console_output')
+def console_output():
+    """Return the console log buffer as plain text."""
+    global console_log_buffer
+    
+    if not console_log_buffer:
+        return "No console output yet. Start inference to see logs."
+    
+    return "\n".join(console_log_buffer)
+
+
 # -------------------------------
 # 🏁 Main Entry
 # -------------------------------
 if __name__ == '__main__':
+    # Initialize logging
+    log_to_console("YoloE Web Service Starting...")
+    log_to_console("Initializing camera manager...")
+    
     # Initialize camera manager
     camera_manager = CameraManager(max_devices=10)
     camera_manager.start()
 
     # Detect available cameras using the camera manager
-    print("[INFO] Scanning for available cameras...")
+    log_to_console("Scanning for available cameras...")
     time.sleep(5)  # Give manager time for initial detection
     available_cameras = camera_manager.get_available_cameras()
 
     if not available_cameras:
-        print("[ERROR] No cameras detected!")
+        log_to_console("ERROR: No cameras detected!")
         camera_manager.stop()
         exit(1)
 
-    print(f"[INFO] Found cameras: {available_cameras}")
+    log_to_console(f"Found cameras: {available_cameras}")
     current_camera = available_cameras[0]
 
     # Pre-open the default camera in background
     camera_manager.request_pre_open(current_camera)
 
+    log_to_console("Starting Flask web server on http://127.0.0.1:8080")
+    log_to_console("Ready to accept requests!")
+    
     try:
         app.run(host='127.0.0.1', port=8080, debug=False, threaded=True)
     finally:

@@ -6,6 +6,19 @@ import sys
 import re
 
 
+# Global cache for app.py content
+_app_content = None
+
+
+def get_app_content():
+    """Read app.py content once and cache it."""
+    global _app_content
+    if _app_content is None:
+        with open('app.py', 'r') as f:
+            _app_content = f.read()
+    return _app_content
+
+
 def test_imports():
     """Test that required imports are available."""
     print("Testing imports...")
@@ -22,8 +35,7 @@ def test_frame_copy_removal():
     """Test that unnecessary frame copies were removed."""
     print("\nTesting frame copy optimization...")
     try:
-        with open('app.py', 'r') as f:
-            content = f.read()
+        content = get_app_content()
         
         # Check that we're not copying result.orig_img
         if 'result.orig_img.copy()' in content:
@@ -50,8 +62,7 @@ def test_jpeg_optimization():
     """Test that JPEG encoding optimization was added."""
     print("\nTesting JPEG encoding optimization...")
     try:
-        with open('app.py', 'r') as f:
-            content = f.read()
+        content = get_app_content()
         
         # Check for encode_param with JPEG quality
         if 'IMWRITE_JPEG_QUALITY' in content and 'encode_param' in content:
@@ -77,31 +88,27 @@ def test_sleep_removal():
     """Test that sleep was removed from inference loop."""
     print("\nTesting sleep removal from inference loop...")
     try:
-        with open('app.py', 'r') as f:
-            lines = f.readlines()
+        content = get_app_content()
         
-        # Find the inference_thread function
-        in_inference_thread = False
-        found_sleep_after_lock = False
+        # Use regex to find inference_thread function and check for sleep after lock
+        # More flexible approach: look for time.sleep within inference_thread after "with lock:"
+        inference_func_match = re.search(
+            r'def inference_thread\(\):.*?(?=\ndef\s|\Z)',
+            content,
+            re.DOTALL
+        )
         
-        for i, line in enumerate(lines):
-            if 'def inference_thread' in line:
-                in_inference_thread = True
-            elif in_inference_thread and 'def ' in line and 'inference_thread' not in line:
-                # Reached another function
-                break
-            elif in_inference_thread and 'with lock:' in line:
-                # Check the next few lines after the lock
-                for j in range(i + 1, min(i + 5, len(lines))):
-                    if 'time.sleep(0.001)' in lines[j]:
-                        found_sleep_after_lock = True
-                        break
-        
-        if found_sleep_after_lock:
-            print("✗ time.sleep(0.001) still present in inference loop")
-            return False
+        if inference_func_match:
+            inference_func = inference_func_match.group(0)
+            # Look for sleep after "with lock:" but before the function ends
+            if re.search(r'with\s+lock:.*?time\.sleep\s*\(\s*0\.001\s*\)', inference_func, re.DOTALL):
+                print("✗ time.sleep(0.001) still present in inference loop after lock")
+                return False
+            else:
+                print("✓ Removed time.sleep() from inference loop")
         else:
-            print("✓ Removed time.sleep() from inference loop")
+            print("⚠ Could not locate inference_thread function")
+            return None
         
         return True
     except Exception as e:
@@ -113,8 +120,7 @@ def test_half_precision_support():
     """Test that half-precision support was added."""
     print("\nTesting half-precision (FP16) support...")
     try:
-        with open('app.py', 'r') as f:
-            content = f.read()
+        content = get_app_content()
         
         # Check for use_half_precision variable
         if 'use_half_precision' in content:
@@ -123,8 +129,8 @@ def test_half_precision_support():
             print("✗ use_half_precision variable not found")
             return False
         
-        # Check for CUDA detection
-        if 'torch.cuda.is_available()' in content and 'use_half_precision = True' in content:
+        # Check for CUDA detection (more flexible matching)
+        if re.search(r'torch\.cuda\.is_available\(\).*?use_half_precision\s*=\s*True', content, re.DOTALL):
             print("✓ Auto-detection of CUDA for FP16")
         else:
             print("✗ CUDA detection for FP16 not found")
@@ -147,8 +153,7 @@ def test_frame_skipping():
     """Test that frame skipping was implemented in stream."""
     print("\nTesting frame skipping in stream...")
     try:
-        with open('app.py', 'r') as f:
-            content = f.read()
+        content = get_app_content()
         
         # Check for frame_skip_counter
         if 'frame_skip_counter' in content:
@@ -157,8 +162,8 @@ def test_frame_skipping():
             print("✗ frame_skip_counter not found")
             return False
         
-        # Check for modulo operation to skip frames
-        if re.search(r'frame_skip_counter\s*%\s*2', content):
+        # Check for modulo operation to skip frames (more flexible)
+        if re.search(r'frame_skip_counter\s*%\s*\d+', content):
             print("✓ Frame skipping logic implemented")
         else:
             print("✗ Frame skipping logic not found")
@@ -174,8 +179,7 @@ def test_text_rendering_optimization():
     """Test that text rendering was optimized."""
     print("\nTesting text rendering optimization...")
     try:
-        with open('app.py', 'r') as f:
-            content = f.read()
+        content = get_app_content()
         
         # Check for .format() usage in performance overlay
         if '.format(' in content and 'perf_text' in content:

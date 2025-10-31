@@ -448,7 +448,7 @@ def process_video_file(input_path, output_path, use_heatmap=False):
     except Exception as e:
         log_to_console(f"ERROR: Video processing failed: {e}")
         log_to_console(f"Traceback: {traceback.format_exc()}")
-        video_processing_status = f"Error: {str(e)}"
+        video_processing_status = "Error occurred during processing"
         video_processing = False
         return False
 
@@ -1497,7 +1497,7 @@ def save_visual_prompt():
     except Exception as e:
         print(f"[ERROR] Failed to save visual prompt: {e}")
         print(f"[ERROR] Traceback: {traceback.format_exc()}")
-        return f"<html><body><h3>Error: {str(e)}</h3><a href='/'>Back</a></body></html>"
+        return "<html><body><h3>Error saving visual prompt. Please check the console for details.</h3><a href='/'>Back</a></body></html>"
 
 
 @app.route('/clear_visual_prompt', methods=['POST'])
@@ -1719,7 +1719,7 @@ def upload_video():
     except Exception as e:
         log_to_console(f"ERROR: Failed to upload video: {e}")
         log_to_console(f"Traceback: {traceback.format_exc()}")
-        return f"<html><body><h3>Error uploading video: {str(e)}</h3><a href='/'>Back</a></body></html>"
+        return "<html><body><h3>Error uploading video. Please check the console for details.</h3><a href='/'>Back</a></body></html>"
 
 
 @app.route('/download_video')

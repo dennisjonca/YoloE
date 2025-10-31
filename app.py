@@ -1,5 +1,6 @@
 from flask import Flask, Response, request, send_file
 from werkzeug.utils import secure_filename
+import uuid
 
 try:
     from flask import escape
@@ -11,7 +12,8 @@ import numpy as np
 import torch
 import traceback
 from camera_manager import CameraManager
-from heatmap_generator import YoloEHeatmapGenerator, get_default_params
+from heatmap_generator import YoloEHeatmapGenerator, get_default_params, letterbox
+from pytorch_grad_cam.utils.image import show_cam_on_image
 
 app = Flask(__name__)
 
@@ -198,6 +200,7 @@ video_processing_progress = 0  # Progress percentage (0-100)
 video_processing_status = ""  # Status message
 last_uploaded_video = None  # Path to the last uploaded video
 last_processed_video = None  # Path to the last processed video
+video_processing_lock = threading.Lock()  # Lock for thread-safe access to video state
 
 
 def log_to_console(message):
@@ -311,6 +314,8 @@ def process_video_file(input_path, output_path, use_heatmap=False):
         
         # Process frames
         frame_count = 0
+        
+        # Import visual prompting predictor if needed
         if use_visual_prompt:
             from ultralytics.models.yolo.yoloe import YOLOEVPSegPredictor
         
@@ -325,9 +330,6 @@ def process_video_file(input_path, output_path, use_heatmap=False):
             if use_heatmap and heatmap_gen is not None:
                 # Heatmap mode
                 try:
-                    from heatmap_generator import letterbox
-                    from pytorch_grad_cam.utils.image import show_cam_on_image
-                    
                     # Process image for heatmap
                     img = letterbox(frame)[0]
                     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -711,6 +713,10 @@ def index():
     # Get hardware information
     hw_info = get_hardware_info()
     hardware_status = f"{hw_info['device_name']} ({hw_info['cpu_count']} CPU cores)"
+    
+    # Get video processing state safely
+    with video_processing_lock:
+        processed_video_path = last_processed_video
 
     camera_options_html = "".join(
         [f'<option value="{cam}" {"selected" if cam == current_camera else ""}>Camera {cam}</option>'
@@ -949,10 +955,10 @@ def index():
                 {"<p><strong>Progress:</strong> " + str(video_processing_progress) + "%</p>" if video_processing else ""}
             </div>
             
-            <div class="section" {"style='display:none;'" if not last_processed_video else ""}>
+            <div class="section" {"style='display:none;'" if not processed_video_path else ""}>
                 <h2>Processed Video</h2>
                 <p>Your processed video is ready for download:</p>
-                <a href="/download_video?filename={os.path.basename(last_processed_video) if last_processed_video else ''}" class="button" download>Download Processed Video</a>
+                <a href="/download_video?filename={os.path.basename(processed_video_path) if processed_video_path else ''}" class="button" download>Download Processed Video</a>
                 <br><br>
                 <p style="font-size: 0.9em; color: #666;">
                     <strong>Note:</strong> Processed videos are saved in the 'processed_videos' folder.
@@ -1662,11 +1668,12 @@ def upload_video():
         return f"<html><body><h3>Invalid file type. Allowed: {', '.join(ALLOWED_EXTENSIONS)}</h3><a href='/'>Back</a></body></html>"
     
     try:
-        # Secure the filename
+        # Secure the filename and create unique identifier
         filename = secure_filename(file.filename)
+        unique_id = str(uuid.uuid4())[:8]  # Use first 8 chars of UUID for readability
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         base_name, ext = os.path.splitext(filename)
-        unique_filename = f"{base_name}_{timestamp}{ext}"
+        unique_filename = f"{base_name}_{timestamp}_{unique_id}{ext}"
         
         # Save uploaded file
         upload_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
@@ -1676,7 +1683,7 @@ def upload_video():
         log_to_console(f"Video uploaded: {unique_filename}")
         
         # Prepare output path
-        output_filename = f"processed_{base_name}_{timestamp}.mp4"
+        output_filename = f"processed_{base_name}_{timestamp}_{unique_id}.mp4"
         output_path = os.path.join(app.config['PROCESSED_FOLDER'], output_filename)
         
         # Check if heatmap is enabled
@@ -1689,7 +1696,8 @@ def upload_video():
             success = process_video_file(upload_path, output_path, use_heatmap=enable_heatmap)
             if success:
                 global last_processed_video
-                last_processed_video = output_path
+                with video_processing_lock:
+                    last_processed_video = output_path
         
         thread = threading.Thread(target=process_thread, daemon=True)
         thread.start()
@@ -1749,11 +1757,14 @@ def video_status():
     """Get current video processing status (for AJAX polling)."""
     global video_processing, video_processing_progress, video_processing_status
     
+    with video_processing_lock:
+        has_result = last_processed_video is not None
+    
     return {
         'processing': video_processing,
         'progress': video_processing_progress,
         'status': video_processing_status,
-        'has_result': last_processed_video is not None
+        'has_result': has_result
     }
 
 

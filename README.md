@@ -3,7 +3,19 @@ A YoloE project to demonstrate using AI in process.
 
 ## Features
 
-### Live Heatmap Mode (NEW!)
+### Video Upload & Processing (NEW!)
+The application now supports uploading and processing local video files:
+
+- **File Upload**: Upload video files (MP4, AVI, MOV, MKV, WebM, FLV, WMV) up to 500MB
+- **Model Integration**: Uses the same YOLO models and detection settings as live inference
+- **Custom Classes**: Process videos with custom object classes or visual prompts
+- **Heatmap Support**: Optional heatmap overlay for uploaded videos
+- **Progress Tracking**: Real-time progress updates during processing
+- **Download Results**: Download processed videos with detections and annotations
+
+See [VIDEO_UPLOAD_FEATURE.md](VIDEO_UPLOAD_FEATURE.md) for detailed documentation.
+
+### Live Heatmap Mode
 The application now supports real-time heatmap visualization during live camera inference:
 
 - **Real-time Attention**: See what the model focuses on as objects move in real-time
@@ -166,6 +178,25 @@ To disable heatmap mode and return to normal view:
 
 See [LIVE_HEATMAP_MODE.md](LIVE_HEATMAP_MODE.md) for detailed usage and troubleshooting.
 
+## Using Video Upload
+
+To process a local video file with YOLO detection:
+1. Stop live inference if it's running
+2. Click on the "Video Upload" tab
+3. Click "Choose File" and select your video (MP4, AVI, MOV, MKV, WebM, FLV, WMV)
+4. Optional: Check "Enable Heatmap Mode for Video" for heatmap overlay
+5. Click "Upload and Process" to start processing
+6. Wait for processing to complete (progress shown on page)
+7. Click "Download Processed Video" when ready
+
+**Tips:**
+- Maximum file size: 500MB
+- Processing uses current model, classes, and settings
+- Enable heatmap for visualization (slower but shows model attention)
+- Use custom classes or visual prompting before uploading for specific detection
+
+See [VIDEO_UPLOAD_FEATURE.md](VIDEO_UPLOAD_FEATURE.md) for detailed documentation and examples.
+
 ## Using Heatmap Generation (Snapshot)
 
 To generate a heatmap visualization showing what the model focuses on:
@@ -217,6 +248,21 @@ python test_custom_classes.py
 ```
 
 This verifies that the custom classes functionality is properly implemented.
+
+## Testing Video Upload Feature
+
+Run the video upload test suite:
+```bash
+python test_video_upload.py
+```
+
+This will test:
+- Required imports and dependencies
+- Video upload configuration
+- File validation and security
+- Processing functions
+- UI integration
+- Heatmap and visual prompting support
 
 ## Testing Heatmap Generation
 
@@ -305,7 +351,8 @@ The application now includes configurable detection parameters to optimize track
 
 ## Documentation
 
-- [PERFORMANCE_OPTIMIZATIONS.md](PERFORMANCE_OPTIMIZATIONS.md) - **NEW!** Performance improvements for faster inference FPS
+- [VIDEO_UPLOAD_FEATURE.md](VIDEO_UPLOAD_FEATURE.md) - **NEW!** Video upload and processing feature documentation
+- [PERFORMANCE_OPTIMIZATIONS.md](PERFORMANCE_OPTIMIZATIONS.md) - Performance improvements for faster inference FPS
 - [LIVE_HEATMAP_MODE.md](LIVE_HEATMAP_MODE.md) - Real-time heatmap visualization feature
 - [HEATMAP_FEATURE.md](HEATMAP_FEATURE.md) - Snapshot-based heatmap generation documentation
 - [PERFORMANCE_GUIDE.md](PERFORMANCE_GUIDE.md) - Complete guide to detection parameters, hardware, and troubleshooting
@@ -335,10 +382,12 @@ YoloE/
 ├── test_heatmap_unit.py          # Heatmap module unit tests
 ├── test_heatmap_generation.py    # Heatmap generation integration test
 ├── test_live_heatmap_lightweight.py  # Live heatmap mode test suite
+├── test_video_upload.py          # Video upload feature test suite
 ├── verify_camera_manager.py      # Camera manager verification script
 ├── verify_model_caching.py       # Model caching verification script
 ├── verify_model_warmup.py        # Model warm-up verification script
 ├── README.md                     # This file
+├── VIDEO_UPLOAD_FEATURE.md       # Video upload feature documentation
 ├── LIVE_HEATMAP_MODE.md          # Live heatmap mode feature documentation
 ├── HEATMAP_FEATURE.md            # Snapshot-based heatmap documentation
 ├── VISUAL_PROMPTING_FEATURE.md   # Visual prompting feature documentation

@@ -31,6 +31,15 @@ class TestVideoViewerFeature(unittest.TestCase):
             self.assertIn("@app.route('/view_video'", content, "view_video route not found")
             print("✓ view_video route exists")
 
+    def test_stream_video_route(self):
+        """Test that stream_video route exists for MJPEG streaming."""
+        with open('app.py', 'r') as f:
+            content = f.read()
+            
+            self.assertIn("@app.route('/stream_video'", content, "stream_video route not found")
+            self.assertIn('multipart/x-mixed-replace', content, "MJPEG mimetype not found")
+            print("✓ stream_video route exists for MJPEG streaming")
+
     def test_video_player_ui(self):
         """Test that video player UI elements exist."""
         with open('app.py', 'r') as f:
@@ -104,24 +113,15 @@ class TestVideoViewerFeature(unittest.TestCase):
             print("✓ Video format mimetypes are properly handled")
 
     def test_range_request_support(self):
-        """Test that view_video supports HTTP range requests for video streaming."""
+        """Test that MJPEG streaming is implemented for universal browser compatibility."""
         with open('app.py', 'r') as f:
             content = f.read()
             
-            # Check that conditional=True is set for send_file in view_video
-            in_view_video = False
-            has_conditional = False
+            # Check that MJPEG streaming is implemented
+            self.assertIn('def stream_video():', content, "stream_video function not found")
+            self.assertIn('multipart/x-mixed-replace', content, "MJPEG mimetype not found")
             
-            for line in content.split('\n'):
-                if 'def view_video():' in line:
-                    in_view_video = True
-                elif in_view_video and 'def ' in line and 'view_video' not in line:
-                    break
-                elif in_view_video and 'conditional=True' in line:
-                    has_conditional = True
-            
-            self.assertTrue(has_conditional, "Range request support (conditional=True) not found in view_video")
-            print("✓ view_video route supports HTTP range requests for video streaming")
+            print("✓ MJPEG streaming implemented for universal browser compatibility")
 
 
 def run_tests():

@@ -978,9 +978,7 @@ def index():
                 
                 <div id="videoPlayerContainer" style="display:none; margin-top: 20px;">
                     <h3 id="currentVideoTitle">Video Player</h3>
-                    <video id="videoPlayer" controls style="width: 100%; max-width: 800px; border: 2px solid #333;">
-                        Your browser does not support the video tag.
-                    </video>
+                    <img id="videoPlayer" src="" style="width: 100%; max-width: 800px; border: 2px solid #333;">
                     <br><br>
                     <button onclick="closeVideoPlayer()" class="button">Close Player</button>
                 </div>
@@ -1252,8 +1250,8 @@ def index():
                 const container = document.getElementById('videoPlayerContainer');
                 const title = document.getElementById('currentVideoTitle');
                 
-                // Set video source
-                player.src = `/view_video?filename=${{encodeURIComponent(filename)}}`;
+                // Set MJPEG stream source (works in all browsers, no HTML5 required)
+                player.src = `/stream_video?filename=${{encodeURIComponent(filename)}}`;
                 
                 // Update title
                 title.textContent = `Playing: ${{filename}}`;
@@ -1263,18 +1261,13 @@ def index():
                 
                 // Scroll to player
                 container.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
-                
-                // Start playing
-                player.load();
-                player.play().catch(e => console.log('Autoplay prevented:', e));
             }}
 
             function closeVideoPlayer() {{
                 const player = document.getElementById('videoPlayer');
                 const container = document.getElementById('videoPlayerContainer');
                 
-                // Stop and clear video
-                player.pause();
+                // Stop stream by clearing source
                 player.src = '';
                 
                 // Hide player
@@ -1902,6 +1895,81 @@ def list_videos():
     except Exception as e:
         log_to_console(f"ERROR: Error listing videos: {e}")
         return {'videos': [], 'error': 'Error listing videos'}
+
+
+@app.route('/stream_video')
+def stream_video():
+    """Stream a processed video as MJPEG (motion JPEG) for universal browser compatibility."""
+    filename = request.args.get('filename', '')
+    
+    if not filename:
+        return "File not specified", 400
+    
+    # Security: Validate path is within processed_videos directory
+    try:
+        # Get absolute paths
+        processed_dir = os.path.abspath(app.config['PROCESSED_FOLDER'])
+        requested_path = os.path.abspath(os.path.join(processed_dir, filename))
+        
+        # Ensure the requested path is within processed_videos directory
+        if not requested_path.startswith(processed_dir):
+            log_to_console(f"[SECURITY] Path traversal attempt blocked: {filename}")
+            return "Access denied", 403
+        
+        # Check if file exists
+        if not os.path.exists(requested_path) or not os.path.isfile(requested_path):
+            return "Video not found", 404
+        
+        def generate_frames():
+            """Generate MJPEG stream from video file."""
+            cap = cv2.VideoCapture(requested_path)
+            
+            if not cap.isOpened():
+                log_to_console(f"ERROR: Could not open video file: {requested_path}")
+                return
+            
+            # Get video FPS to control playback speed
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            if fps <= 0 or fps > 120:  # Sanity check
+                fps = 30  # Default to 30 FPS
+            
+            frame_delay = 1.0 / fps  # Delay between frames in seconds
+            
+            # Optimize JPEG encoding quality for faster encoding
+            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 85]
+            
+            try:
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        # Loop the video - restart from beginning
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        continue
+                    
+                    # Encode frame as JPEG
+                    ret, buffer = cv2.imencode('.jpg', frame, encode_param)
+                    if not ret:
+                        continue
+                    
+                    # Yield frame in MJPEG format
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+                    
+                    # Control playback speed
+                    time.sleep(frame_delay)
+                    
+            except GeneratorExit:
+                # Client disconnected
+                pass
+            finally:
+                cap.release()
+        
+        return Response(generate_frames(),
+                        mimetype='multipart/x-mixed-replace; boundary=frame')
+        
+    except Exception as e:
+        log_to_console(f"ERROR: Error streaming video: {e}")
+        return "Error loading video", 500
 
 
 @app.route('/view_video')

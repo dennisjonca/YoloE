@@ -964,6 +964,27 @@ def index():
                     <strong>Note:</strong> Processed videos are saved in the 'processed_videos' folder.
                 </p>
             </div>
+            
+            <div class="section">
+                <h2>View Processed Videos</h2>
+                <p>Select a processed video from the list below to view it in the browser:</p>
+                
+                <button onclick="refreshVideoList()" class="button">Refresh Video List</button>
+                <br><br>
+                
+                <div id="videoListContainer">
+                    <p>Loading videos...</p>
+                </div>
+                
+                <div id="videoPlayerContainer" style="display:none; margin-top: 20px;">
+                    <h3 id="currentVideoTitle">Video Player</h3>
+                    <video id="videoPlayer" controls style="width: 100%; max-width: 800px; border: 2px solid #333;">
+                        Your browser does not support the video tag.
+                    </video>
+                    <br><br>
+                    <button onclick="closeVideoPlayer()" class="button">Close Player</button>
+                </div>
+            </div>
         </div>
 
         <!-- Tab 5: Console Output -->
@@ -1183,6 +1204,86 @@ def index():
                 form.appendChild(input);
                 document.body.appendChild(form);
                 form.submit();
+            }}
+
+            // Video viewing functions
+            function refreshVideoList() {{
+                const container = document.getElementById('videoListContainer');
+                container.innerHTML = '<p>Loading videos...</p>';
+                
+                fetch('/list_videos')
+                    .then(response => response.json())
+                    .then(data => {{
+                        if (data.videos && data.videos.length > 0) {{
+                            let html = '<table style="width: 100%; border-collapse: collapse;">';
+                            html += '<tr style="background-color: #f0f0f0;">';
+                            html += '<th style="padding: 10px; text-align: left; border: 1px solid #ccc;">Video Name</th>';
+                            html += '<th style="padding: 10px; text-align: left; border: 1px solid #ccc;">Size (MB)</th>';
+                            html += '<th style="padding: 10px; text-align: left; border: 1px solid #ccc;">Modified</th>';
+                            html += '<th style="padding: 10px; text-align: left; border: 1px solid #ccc;">Actions</th>';
+                            html += '</tr>';
+                            
+                            data.videos.forEach(video => {{
+                                html += '<tr>';
+                                html += `<td style="padding: 10px; border: 1px solid #ccc;">${{video.filename}}</td>`;
+                                html += `<td style="padding: 10px; border: 1px solid #ccc;">${{video.size_mb}}</td>`;
+                                html += `<td style="padding: 10px; border: 1px solid #ccc;">${{video.modified}}</td>`;
+                                html += `<td style="padding: 10px; border: 1px solid #ccc;">`;
+                                html += `<button onclick="playVideo('${{video.filename}}')" class="button">View</button> `;
+                                html += `<a href="/download_video?filename=${{video.filename}}" class="button" download>Download</a>`;
+                                html += `</td>`;
+                                html += '</tr>';
+                            }});
+                            
+                            html += '</table>';
+                            container.innerHTML = html;
+                        }} else {{
+                            container.innerHTML = '<p>No processed videos found. Upload and process a video first.</p>';
+                        }}
+                    }})
+                    .catch(error => {{
+                        console.error('Error fetching video list:', error);
+                        container.innerHTML = '<p style="color: red;">Error loading video list.</p>';
+                    }});
+            }}
+
+            function playVideo(filename) {{
+                const player = document.getElementById('videoPlayer');
+                const container = document.getElementById('videoPlayerContainer');
+                const title = document.getElementById('currentVideoTitle');
+                
+                // Set video source
+                player.src = `/view_video?filename=${{encodeURIComponent(filename)}}`;
+                
+                // Update title
+                title.textContent = `Playing: ${{filename}}`;
+                
+                // Show player
+                container.style.display = 'block';
+                
+                // Scroll to player
+                container.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+                
+                // Start playing
+                player.load();
+                player.play().catch(e => console.log('Autoplay prevented:', e));
+            }}
+
+            function closeVideoPlayer() {{
+                const player = document.getElementById('videoPlayer');
+                const container = document.getElementById('videoPlayerContainer');
+                
+                // Stop and clear video
+                player.pause();
+                player.src = '';
+                
+                // Hide player
+                container.style.display = 'none';
+            }}
+
+            // Load video list when page loads or tab is switched
+            if (document.getElementById('tab4')) {{
+                refreshVideoList();
             }}
         </script>
         </body>
@@ -1766,6 +1867,83 @@ def video_status():
         'status': video_processing_status,
         'has_result': has_result
     }
+
+
+@app.route('/list_videos')
+def list_videos():
+    """List all processed videos available for viewing."""
+    try:
+        processed_dir = os.path.abspath(app.config['PROCESSED_FOLDER'])
+        
+        if not os.path.exists(processed_dir):
+            return {'videos': []}
+        
+        # Get all video files in processed directory
+        videos = []
+        for filename in os.listdir(processed_dir):
+            filepath = os.path.join(processed_dir, filename)
+            if os.path.isfile(filepath) and filename.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm')):
+                # Get file stats
+                stat_info = os.stat(filepath)
+                file_size_mb = stat_info.st_size / (1024 * 1024)
+                modified_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stat_info.st_mtime))
+                
+                videos.append({
+                    'filename': filename,
+                    'size_mb': round(file_size_mb, 2),
+                    'modified': modified_time
+                })
+        
+        # Sort by modification time (newest first)
+        videos.sort(key=lambda x: x['modified'], reverse=True)
+        
+        return {'videos': videos}
+        
+    except Exception as e:
+        log_to_console(f"ERROR: Error listing videos: {e}")
+        return {'videos': [], 'error': 'Error listing videos'}
+
+
+@app.route('/view_video')
+def view_video():
+    """Stream a processed video for viewing in browser."""
+    filename = request.args.get('filename', '')
+    
+    if not filename:
+        return "File not specified", 400
+    
+    # Security: Validate path is within processed_videos directory
+    try:
+        # Get absolute paths
+        processed_dir = os.path.abspath(app.config['PROCESSED_FOLDER'])
+        requested_path = os.path.abspath(os.path.join(processed_dir, filename))
+        
+        # Ensure the requested path is within processed_videos directory
+        if not requested_path.startswith(processed_dir):
+            log_to_console(f"[SECURITY] Path traversal attempt blocked: {filename}")
+            return "Access denied", 403
+        
+        # Check if file exists
+        if not os.path.exists(requested_path) or not os.path.isfile(requested_path):
+            return "Video not found", 404
+        
+        # Determine mimetype based on extension
+        ext = filename.lower().split('.')[-1]
+        mimetype_map = {
+            'mp4': 'video/mp4',
+            'avi': 'video/x-msvideo',
+            'mov': 'video/quicktime',
+            'mkv': 'video/x-matroska',
+            'webm': 'video/webm'
+        }
+        mimetype = mimetype_map.get(ext, 'video/mp4')
+        
+        # Serve file for inline viewing (not as attachment)
+        return send_file(requested_path, mimetype=mimetype)
+        
+    except Exception as e:
+        log_to_console(f"ERROR: Error serving video: {e}")
+        return "Error loading video", 500
 
 
 # -------------------------------

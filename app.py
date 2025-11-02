@@ -1906,7 +1906,7 @@ def list_videos():
 
 @app.route('/view_video')
 def view_video():
-    """Stream a processed video for viewing in browser."""
+    """Stream a processed video for viewing in browser with range request support."""
     filename = request.args.get('filename', '')
     
     if not filename:
@@ -1938,8 +1938,14 @@ def view_video():
         }
         mimetype = mimetype_map.get(ext, 'video/mp4')
         
-        # Serve file for inline viewing (not as attachment)
-        return send_file(requested_path, mimetype=mimetype)
+        # Serve file for inline viewing with range request support
+        # conditional=True enables support for HTTP range requests (required for video seeking)
+        return send_file(
+            requested_path, 
+            mimetype=mimetype,
+            conditional=True,
+            download_name=filename
+        )
         
     except Exception as e:
         log_to_console(f"ERROR: Error serving video: {e}")

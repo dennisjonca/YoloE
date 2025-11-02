@@ -103,6 +103,26 @@ class TestVideoViewerFeature(unittest.TestCase):
             self.assertIn("'avi':", content, "AVI mimetype not found")
             print("✓ Video format mimetypes are properly handled")
 
+    def test_range_request_support(self):
+        """Test that view_video supports HTTP range requests for video streaming."""
+        with open('app.py', 'r') as f:
+            content = f.read()
+            
+            # Check that conditional=True is set for send_file in view_video
+            in_view_video = False
+            has_conditional = False
+            
+            for line in content.split('\n'):
+                if 'def view_video():' in line:
+                    in_view_video = True
+                elif in_view_video and 'def ' in line and 'view_video' not in line:
+                    break
+                elif in_view_video and 'conditional=True' in line:
+                    has_conditional = True
+            
+            self.assertTrue(has_conditional, "Range request support (conditional=True) not found in view_video")
+            print("✓ view_video route supports HTTP range requests for video streaming")
+
 
 def run_tests():
     """Run all tests and print results."""

@@ -38,3 +38,5 @@ env/
 runs/
 heatmaps/
 result/
+uploads/
+processed_videos/

@@ -1,4 +1,6 @@
 from flask import Flask, Response, request, send_file
+from werkzeug.utils import secure_filename
+import uuid
 
 try:
     from flask import escape
@@ -10,9 +12,22 @@ import numpy as np
 import torch
 import traceback
 from camera_manager import CameraManager
-from heatmap_generator import YoloEHeatmapGenerator, get_default_params
+from heatmap_generator import YoloEHeatmapGenerator, get_default_params, letterbox
+from pytorch_grad_cam.utils.image import show_cam_on_image
 
 app = Flask(__name__)
+
+# Video upload configuration
+UPLOAD_FOLDER = 'uploads'
+PROCESSED_FOLDER = 'processed_videos'
+ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv', 'webm', 'flv', 'wmv'}
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['PROCESSED_FOLDER'] = PROCESSED_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max file size
+
+# Create upload and processed directories if they don't exist
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(PROCESSED_FOLDER, exist_ok=True)
 
 # -------------------------------
 # 🔧 YOLO Model Initialization
@@ -179,6 +194,14 @@ console_log_buffer = []
 console_log_lock = threading.Lock()  # Lock for thread-safe access to console buffer
 max_console_lines = 500
 
+# Video processing state
+video_processing = False  # Flag to indicate if video is being processed
+video_processing_progress = 0  # Progress percentage (0-100)
+video_processing_status = ""  # Status message
+last_uploaded_video = None  # Path to the last uploaded video
+last_processed_video = None  # Path to the last processed video
+video_processing_lock = threading.Lock()  # Lock for thread-safe access to video state
+
 
 def log_to_console(message):
     """Add a message to the console log buffer."""
@@ -191,6 +214,11 @@ def log_to_console(message):
         if len(console_log_buffer) > max_console_lines:
             console_log_buffer = console_log_buffer[-max_console_lines:]
     print(log_entry)  # Also print to actual console
+
+
+def allowed_file(filename):
+    """Check if the uploaded file has an allowed extension."""
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 # -------------------------------
@@ -214,6 +242,215 @@ def detect_cameras(max_devices: int = 10):
             found.append(i)
             cap.release()
     return found
+
+
+def process_video_file(input_path, output_path, use_heatmap=False):
+    """Process a video file with YOLO detection and optional heatmap.
+    
+    Args:
+        input_path: Path to input video file
+        output_path: Path to save processed video
+        use_heatmap: Whether to generate heatmap overlay
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    global video_processing, video_processing_progress, video_processing_status
+    global use_visual_prompt, visual_prompt_dict
+    
+    try:
+        video_processing = True
+        video_processing_progress = 0
+        video_processing_status = "Opening video file..."
+        log_to_console(f"Processing video: {input_path}")
+        
+        # Open input video
+        cap = cv2.VideoCapture(input_path)
+        if not cap.isOpened():
+            log_to_console(f"ERROR: Could not open video file: {input_path}")
+            video_processing_status = "Error: Could not open video file"
+            video_processing = False
+            return False
+        
+        # Get video properties
+        fps = int(cap.get(cv2.CAP_PROP_FPS))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        log_to_console(f"Video properties: {width}x{height} @ {fps}fps, {total_frames} frames")
+        video_processing_status = f"Processing {total_frames} frames..."
+        
+        # Create video writer
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        
+        if not out.isOpened():
+            log_to_console(f"ERROR: Could not create output video: {output_path}")
+            cap.release()
+            video_processing_status = "Error: Could not create output video"
+            video_processing = False
+            return False
+        
+        # Initialize heatmap generator if needed
+        heatmap_gen = None
+        if use_heatmap:
+            try:
+                weight_path = f"yoloe-11{current_model}-seg.pt"
+                hw_info = get_hardware_info()
+                device = 'cuda:0' if hw_info['cuda_available'] else 'cpu'
+                
+                params = get_default_params()
+                params['device'] = device
+                params['show_box'] = True
+                params['renormalize'] = True
+                
+                heatmap_gen = YoloEHeatmapGenerator(weight_path, **params)
+                log_to_console("Heatmap generator initialized for video processing")
+            except Exception as e:
+                log_to_console(f"Failed to initialize heatmap generator: {e}")
+                log_to_console("Falling back to normal processing")
+                use_heatmap = False
+        
+        # Process frames
+        frame_count = 0
+        
+        # Import visual prompting predictor if needed
+        if use_visual_prompt:
+            from ultralytics.models.yolo.yoloe import YOLOEVPSegPredictor
+        
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            frame_count += 1
+            
+            # Process frame based on mode
+            if use_heatmap and heatmap_gen is not None:
+                # Heatmap mode
+                try:
+                    # Process image for heatmap
+                    img = letterbox(frame)[0]
+                    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                    img_float = np.float32(img_rgb) / 255.0
+                    tensor = torch.from_numpy(np.transpose(img_float, axes=[2, 0, 1])).unsqueeze(0).to(
+                        heatmap_gen.device)
+                    tensor.requires_grad_(True)
+                    
+                    # Generate GradCAM
+                    try:
+                        grayscale_cam = heatmap_gen.method(tensor, [heatmap_gen.target])
+                        grayscale_cam = grayscale_cam[0, :]
+                    except Exception:
+                        grayscale_cam = np.zeros(img_float.shape[:2], dtype=np.float32)
+                    
+                    # Create heatmap overlay
+                    cam_image = show_cam_on_image(img_float, grayscale_cam, use_rgb=True)
+                    
+                    # Get predictions for boxes
+                    results = heatmap_gen.yolo_model.predict(
+                        source=frame,
+                        conf=current_conf,
+                        half=use_half_precision,
+                        verbose=False,
+                        show=False
+                    )
+                    
+                    # Process results and draw boxes
+                    if results and len(results) > 0:
+                        result = results[0]
+                        boxes = result.boxes
+                        
+                        if boxes is not None and len(boxes) > 0:
+                            boxes_xyxy = boxes.xyxy.cpu().numpy().astype(np.int32)
+                            
+                            # Renormalize CAM in boxes if enabled
+                            if heatmap_gen.renormalize and len(boxes_xyxy) > 0:
+                                cam_image = heatmap_gen.renormalize_cam_in_bounding_boxes(
+                                    boxes_xyxy, img_float, grayscale_cam
+                                )
+                            
+                            # Draw boxes
+                            if heatmap_gen.show_box:
+                                for i, box_xyxy in enumerate(boxes_xyxy):
+                                    cls_id = int(boxes.cls[i])
+                                    conf = float(boxes.conf[i])
+                                    label = f'{heatmap_gen.model_names[cls_id]} {conf:.2f}'
+                                    color = heatmap_gen.colors[cls_id % len(heatmap_gen.colors)]
+                                    cam_image = heatmap_gen.draw_detections(box_xyxy, color, label, cam_image)
+                    
+                    # Convert back to BGR and resize to original
+                    frame = cv2.cvtColor(cam_image, cv2.COLOR_RGB2BGR)
+                    frame = cv2.resize(frame, (width, height))
+                    
+                except Exception as e:
+                    log_to_console(f"WARN: Heatmap generation failed for frame {frame_count}: {e}")
+                    # Use original frame on error
+            
+            elif use_visual_prompt and visual_prompt_dict is not None:
+                # Visual prompting mode
+                results = model.predict(
+                    source=frame,
+                    visual_prompts=visual_prompt_dict,
+                    predictor=YOLOEVPSegPredictor,
+                    conf=current_conf,
+                    half=use_half_precision,
+                    show=False,
+                    verbose=False
+                )
+                
+                for result in results:
+                    frame = result.orig_img
+                    boxes = result.boxes.xyxy.cpu().numpy().astype(int)
+                    names = result.names
+                    
+                    for box, cls_id in zip(boxes, result.boxes.cls):
+                        x1, y1, x2, y2 = box
+                        label = names[int(cls_id)]
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                        cv2.putText(frame, label, (x1, y1 + 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            else:
+                # Text prompting mode
+                for result in model.track(source=frame, conf=current_conf, iou=current_iou, 
+                                         half=use_half_precision, show=False, persist=True, verbose=False):
+                    frame = result.orig_img
+                    boxes = result.boxes.xyxy.cpu().numpy().astype(int)
+                    names = result.names
+                    
+                    for box, cls_id in zip(boxes, result.boxes.cls):
+                        x1, y1, x2, y2 = box
+                        label = names[int(cls_id)]
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                        cv2.putText(frame, label, (x1, y1 + 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            
+            # Write processed frame
+            out.write(frame)
+            
+            # Update progress
+            video_processing_progress = int((frame_count / total_frames) * 100)
+            if frame_count % 30 == 0:  # Log every 30 frames
+                log_to_console(f"Processing: {frame_count}/{total_frames} frames ({video_processing_progress}%)")
+        
+        # Cleanup
+        cap.release()
+        out.release()
+        
+        video_processing_progress = 100
+        video_processing_status = f"Complete! Processed {frame_count} frames"
+        log_to_console(f"Video processing complete: {output_path}")
+        video_processing = False
+        
+        return True
+        
+    except Exception as e:
+        log_to_console(f"ERROR: Video processing failed: {e}")
+        log_to_console(f"Traceback: {traceback.format_exc()}")
+        video_processing_status = "Error occurred during processing"
+        video_processing = False
+        return False
 
 
 # -------------------------------
@@ -476,6 +713,10 @@ def index():
     # Get hardware information
     hw_info = get_hardware_info()
     hardware_status = f"{hw_info['device_name']} ({hw_info['cpu_count']} CPU cores)"
+    
+    # Get video processing state safely
+    with video_processing_lock:
+        processed_video_path = last_processed_video
 
     camera_options_html = "".join(
         [f'<option value="{cam}" {"selected" if cam == current_camera else ""}>Camera {cam}</option>'
@@ -574,7 +815,8 @@ def index():
             <div class="tab active" onclick="switchTab('tab1')">Status & Live Feed</div>
             <div class="tab" onclick="switchTab('tab2')">Configuration & Parameters</div>
             <div class="tab" onclick="switchTab('tab3')">Prompting</div>
-            <div class="tab" onclick="switchTab('tab4')">Console Output</div>
+            <div class="tab" onclick="switchTab('tab4')">Video Upload</div>
+            <div class="tab" onclick="switchTab('tab5')">Console Output</div>
         </div>
 
         <!-- Tab 1: Status & Live Feed -->
@@ -689,8 +931,62 @@ def index():
             </div>
         </div>
 
-        <!-- Tab 4: Console Output -->
+        <!-- Tab 4: Video Upload -->
         <div id="tab4" class="tab-content">
+            <div class="section">
+                <h2>Upload Video File</h2>
+                <p>Upload a local video file to analyze with YOLO detection. Supported formats: MP4, AVI, MOV, MKV, WebM, FLV, WMV</p>
+                <p><strong>Note:</strong> Stop live inference before processing videos. Video processing uses the current model, classes, and settings.</p>
+                
+                <form action="/upload_video" method="post" enctype="multipart/form-data">
+                    <label for="videoFile">Select Video File (max 500MB):</label><br>
+                    <input type="file" name="videoFile" id="videoFile" accept=".mp4,.avi,.mov,.mkv,.webm,.flv,.wmv" required><br><br>
+                    
+                    <label for="enableHeatmap">
+                        <input type="checkbox" name="enableHeatmap" id="enableHeatmap" value="1">
+                        Enable Heatmap Mode for Video
+                    </label><br><br>
+                    
+                    <input type="submit" value="Upload and Process" {"disabled" if running or video_processing else ""} class="button">
+                </form>
+                
+                {"<p style='color: orange;'><strong>Processing in progress... Please wait.</strong></p>" if video_processing else ""}
+                {"<p><strong>Status:</strong> " + video_processing_status + "</p>" if video_processing_status else ""}
+                {"<p><strong>Progress:</strong> " + str(video_processing_progress) + "%</p>" if video_processing else ""}
+            </div>
+            
+            <div class="section" {"style='display:none;'" if not processed_video_path else ""}>
+                <h2>Processed Video</h2>
+                <p>Your processed video is ready for download:</p>
+                <a href="/download_video?filename={os.path.basename(processed_video_path) if processed_video_path else ''}" class="button" download>Download Processed Video</a>
+                <br><br>
+                <p style="font-size: 0.9em; color: #666;">
+                    <strong>Note:</strong> Processed videos are saved in the 'processed_videos' folder.
+                </p>
+            </div>
+            
+            <div class="section">
+                <h2>View Processed Videos</h2>
+                <p>Select a processed video from the list below to view it in the browser:</p>
+                
+                <button onclick="refreshVideoList()" class="button">Refresh Video List</button>
+                <br><br>
+                
+                <div id="videoListContainer">
+                    <p>Loading videos...</p>
+                </div>
+                
+                <div id="videoPlayerContainer" style="display:none; margin-top: 20px;">
+                    <h3 id="currentVideoTitle">Video Player</h3>
+                    <img id="videoPlayer" src="" style="width: 100%; max-width: 800px; border: 2px solid #333;">
+                    <br><br>
+                    <button onclick="closeVideoPlayer()" class="button">Close Player</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab 5: Console Output -->
+        <div id="tab5" class="tab-content">
             <div class="section">
                 <h2>Console Output</h2>
                 <p>View the application logs and status messages below. This updates every 5 seconds.</p>
@@ -732,8 +1028,8 @@ def index():
                     clickedTab.classList.add('active');
                 }}
 
-                // Start console refresh if on tab 4
-                if (tabId === 'tab4') {{
+                // Start console refresh if on tab 5
+                if (tabId === 'tab5') {{
                     startConsoleRefresh();
                 }} else {{
                     stopConsoleRefresh();
@@ -906,6 +1202,81 @@ def index():
                 form.appendChild(input);
                 document.body.appendChild(form);
                 form.submit();
+            }}
+
+            // Video viewing functions
+            function refreshVideoList() {{
+                const container = document.getElementById('videoListContainer');
+                container.innerHTML = '<p>Loading videos...</p>';
+                
+                fetch('/list_videos')
+                    .then(response => response.json())
+                    .then(data => {{
+                        if (data.videos && data.videos.length > 0) {{
+                            let html = '<table style="width: 100%; border-collapse: collapse;">';
+                            html += '<tr style="background-color: #f0f0f0;">';
+                            html += '<th style="padding: 10px; text-align: left; border: 1px solid #ccc;">Video Name</th>';
+                            html += '<th style="padding: 10px; text-align: left; border: 1px solid #ccc;">Size (MB)</th>';
+                            html += '<th style="padding: 10px; text-align: left; border: 1px solid #ccc;">Modified</th>';
+                            html += '<th style="padding: 10px; text-align: left; border: 1px solid #ccc;">Actions</th>';
+                            html += '</tr>';
+                            
+                            data.videos.forEach(video => {{
+                                html += '<tr>';
+                                html += `<td style="padding: 10px; border: 1px solid #ccc;">${{video.filename}}</td>`;
+                                html += `<td style="padding: 10px; border: 1px solid #ccc;">${{video.size_mb}}</td>`;
+                                html += `<td style="padding: 10px; border: 1px solid #ccc;">${{video.modified}}</td>`;
+                                html += `<td style="padding: 10px; border: 1px solid #ccc;">`;
+                                html += `<button onclick="playVideo('${{video.filename}}')" class="button">View</button> `;
+                                html += `<a href="/download_video?filename=${{video.filename}}" class="button" download>Download</a>`;
+                                html += `</td>`;
+                                html += '</tr>';
+                            }});
+                            
+                            html += '</table>';
+                            container.innerHTML = html;
+                        }} else {{
+                            container.innerHTML = '<p>No processed videos found. Upload and process a video first.</p>';
+                        }}
+                    }})
+                    .catch(error => {{
+                        console.error('Error fetching video list:', error);
+                        container.innerHTML = '<p style="color: red;">Error loading video list.</p>';
+                    }});
+            }}
+
+            function playVideo(filename) {{
+                const player = document.getElementById('videoPlayer');
+                const container = document.getElementById('videoPlayerContainer');
+                const title = document.getElementById('currentVideoTitle');
+                
+                // Set MJPEG stream source (works in all browsers, no HTML5 required)
+                player.src = `/stream_video?filename=${{encodeURIComponent(filename)}}`;
+                
+                // Update title
+                title.textContent = `Playing: ${{filename}}`;
+                
+                // Show player
+                container.style.display = 'block';
+                
+                // Scroll to player
+                container.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+            }}
+
+            function closeVideoPlayer() {{
+                const player = document.getElementById('videoPlayer');
+                const container = document.getElementById('videoPlayerContainer');
+                
+                // Stop stream by clearing source
+                player.src = '';
+                
+                // Hide player
+                container.style.display = 'none';
+            }}
+
+            // Load video list when page loads or tab is switched
+            if (document.getElementById('tab4')) {{
+                refreshVideoList();
             }}
         </script>
         </body>
@@ -1220,7 +1591,7 @@ def save_visual_prompt():
     except Exception as e:
         print(f"[ERROR] Failed to save visual prompt: {e}")
         print(f"[ERROR] Traceback: {traceback.format_exc()}")
-        return f"<html><body><h3>Error: {str(e)}</h3><a href='/'>Back</a></body></html>"
+        return "<html><body><h3>Error saving visual prompt. Please check the console for details.</h3><a href='/'>Back</a></body></html>"
 
 
 @app.route('/clear_visual_prompt', methods=['POST'])
@@ -1363,6 +1734,290 @@ def console_output():
         # This prevents any potential XSS if the content-type is somehow changed
         safe_buffer = [escape(line) for line in console_log_buffer]
         return "\n".join(safe_buffer), 200, {'Content-Type': 'text/plain; charset=utf-8'}
+
+
+@app.route('/upload_video', methods=['POST'])
+def upload_video():
+    """Handle video file upload and start processing."""
+    global last_uploaded_video, last_processed_video, video_processing
+    
+    if running:
+        return "<html><body><h3>Stop live inference first!</h3><a href='/'>Back</a></body></html>"
+    
+    if video_processing:
+        return "<html><body><h3>Video is already being processed. Please wait.</h3><a href='/'>Back</a></body></html>"
+    
+    # Check if file was uploaded
+    if 'videoFile' not in request.files:
+        return "<html><body><h3>No file uploaded</h3><a href='/'>Back</a></body></html>"
+    
+    file = request.files['videoFile']
+    
+    # Check if file has a name
+    if file.filename == '':
+        return "<html><body><h3>No file selected</h3><a href='/'>Back</a></body></html>"
+    
+    # Check if file type is allowed
+    if not allowed_file(file.filename):
+        return f"<html><body><h3>Invalid file type. Allowed: {', '.join(ALLOWED_EXTENSIONS)}</h3><a href='/'>Back</a></body></html>"
+    
+    try:
+        # Secure the filename and create unique identifier
+        filename = secure_filename(file.filename)
+        unique_id = str(uuid.uuid4())[:8]  # Use first 8 chars of UUID for readability
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        base_name, ext = os.path.splitext(filename)
+        unique_filename = f"{base_name}_{timestamp}_{unique_id}{ext}"
+        
+        # Save uploaded file
+        upload_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
+        file.save(upload_path)
+        last_uploaded_video = upload_path
+        
+        log_to_console(f"Video uploaded: {unique_filename}")
+        
+        # Prepare output path
+        output_filename = f"processed_{base_name}_{timestamp}_{unique_id}.mp4"
+        output_path = os.path.join(app.config['PROCESSED_FOLDER'], output_filename)
+        
+        # Check if heatmap is enabled
+        enable_heatmap = request.form.get('enableHeatmap') == '1'
+        
+        log_to_console(f"Starting video processing (heatmap: {enable_heatmap})...")
+        
+        # Start processing in a background thread
+        def process_thread():
+            success = process_video_file(upload_path, output_path, use_heatmap=enable_heatmap)
+            if success:
+                global last_processed_video
+                with video_processing_lock:
+                    last_processed_video = output_path
+        
+        thread = threading.Thread(target=process_thread, daemon=True)
+        thread.start()
+        
+        return '''
+            <html>
+            <head>
+                <meta http-equiv="refresh" content="2; url=/" />
+            </head>
+            <body>
+                <h3>Video uploaded successfully!</h3>
+                <p>Processing has started. You will be redirected to the main page.</p>
+                <p>Check the Video Upload tab for progress and download link.</p>
+                <a href="/">Go to main page now</a>
+            </body>
+            </html>
+        '''
+        
+    except Exception as e:
+        log_to_console(f"ERROR: Failed to upload video: {e}")
+        log_to_console(f"Traceback: {traceback.format_exc()}")
+        return "<html><body><h3>Error uploading video. Please check the console for details.</h3><a href='/'>Back</a></body></html>"
+
+
+@app.route('/download_video')
+def download_video():
+    """Download a processed video file."""
+    filename = request.args.get('filename', '')
+    
+    if not filename:
+        return "File not specified", 400
+    
+    # Security: Validate path is within processed_videos directory
+    try:
+        # Get absolute paths
+        processed_dir = os.path.abspath(app.config['PROCESSED_FOLDER'])
+        requested_path = os.path.abspath(os.path.join(processed_dir, filename))
+        
+        # Ensure the requested path is within processed_videos directory
+        if not requested_path.startswith(processed_dir):
+            log_to_console(f"[SECURITY] Path traversal attempt blocked: {filename}")
+            return "Access denied", 403
+        
+        # Check if file exists
+        if not os.path.exists(requested_path) or not os.path.isfile(requested_path):
+            return "Video not found", 404
+        
+        return send_file(requested_path, mimetype='video/mp4', as_attachment=True, download_name=filename)
+        
+    except Exception as e:
+        log_to_console(f"ERROR: Error serving video: {e}")
+        return "Error loading video", 500
+
+
+@app.route('/video_status')
+def video_status():
+    """Get current video processing status (for AJAX polling)."""
+    global video_processing, video_processing_progress, video_processing_status
+    
+    with video_processing_lock:
+        has_result = last_processed_video is not None
+    
+    return {
+        'processing': video_processing,
+        'progress': video_processing_progress,
+        'status': video_processing_status,
+        'has_result': has_result
+    }
+
+
+@app.route('/list_videos')
+def list_videos():
+    """List all processed videos available for viewing."""
+    try:
+        processed_dir = os.path.abspath(app.config['PROCESSED_FOLDER'])
+        
+        if not os.path.exists(processed_dir):
+            return {'videos': []}
+        
+        # Get all video files in processed directory
+        videos = []
+        for filename in os.listdir(processed_dir):
+            filepath = os.path.join(processed_dir, filename)
+            if os.path.isfile(filepath) and filename.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm')):
+                # Get file stats
+                stat_info = os.stat(filepath)
+                file_size_mb = stat_info.st_size / (1024 * 1024)
+                modified_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stat_info.st_mtime))
+                
+                videos.append({
+                    'filename': filename,
+                    'size_mb': round(file_size_mb, 2),
+                    'modified': modified_time
+                })
+        
+        # Sort by modification time (newest first)
+        videos.sort(key=lambda x: x['modified'], reverse=True)
+        
+        return {'videos': videos}
+        
+    except Exception as e:
+        log_to_console(f"ERROR: Error listing videos: {e}")
+        return {'videos': [], 'error': 'Error listing videos'}
+
+
+@app.route('/stream_video')
+def stream_video():
+    """Stream a processed video as MJPEG (motion JPEG) for universal browser compatibility."""
+    filename = request.args.get('filename', '')
+    
+    if not filename:
+        return "File not specified", 400
+    
+    # Security: Validate path is within processed_videos directory
+    try:
+        # Get absolute paths
+        processed_dir = os.path.abspath(app.config['PROCESSED_FOLDER'])
+        requested_path = os.path.abspath(os.path.join(processed_dir, filename))
+        
+        # Ensure the requested path is within processed_videos directory
+        if not requested_path.startswith(processed_dir):
+            log_to_console(f"[SECURITY] Path traversal attempt blocked: {filename}")
+            return "Access denied", 403
+        
+        # Check if file exists
+        if not os.path.exists(requested_path) or not os.path.isfile(requested_path):
+            return "Video not found", 404
+        
+        def generate_frames():
+            """Generate MJPEG stream from video file."""
+            cap = cv2.VideoCapture(requested_path)
+            
+            if not cap.isOpened():
+                log_to_console(f"ERROR: Could not open video file: {requested_path}")
+                return
+            
+            # Get video FPS to control playback speed
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            if fps <= 0 or fps > 120:  # Sanity check
+                fps = 30  # Default to 30 FPS
+            
+            frame_delay = 1.0 / fps  # Delay between frames in seconds
+            
+            # Optimize JPEG encoding quality for faster encoding
+            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 85]
+            
+            try:
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        # Loop the video - restart from beginning
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        continue
+                    
+                    # Encode frame as JPEG
+                    ret, buffer = cv2.imencode('.jpg', frame, encode_param)
+                    if not ret:
+                        continue
+                    
+                    # Yield frame in MJPEG format
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+                    
+                    # Control playback speed
+                    time.sleep(frame_delay)
+                    
+            except GeneratorExit:
+                # Client disconnected
+                pass
+            finally:
+                cap.release()
+        
+        return Response(generate_frames(),
+                        mimetype='multipart/x-mixed-replace; boundary=frame')
+        
+    except Exception as e:
+        log_to_console(f"ERROR: Error streaming video: {e}")
+        return "Error loading video", 500
+
+
+@app.route('/view_video')
+def view_video():
+    """Stream a processed video for viewing in browser with range request support."""
+    filename = request.args.get('filename', '')
+    
+    if not filename:
+        return "File not specified", 400
+    
+    # Security: Validate path is within processed_videos directory
+    try:
+        # Get absolute paths
+        processed_dir = os.path.abspath(app.config['PROCESSED_FOLDER'])
+        requested_path = os.path.abspath(os.path.join(processed_dir, filename))
+        
+        # Ensure the requested path is within processed_videos directory
+        if not requested_path.startswith(processed_dir):
+            log_to_console(f"[SECURITY] Path traversal attempt blocked: {filename}")
+            return "Access denied", 403
+        
+        # Check if file exists
+        if not os.path.exists(requested_path) or not os.path.isfile(requested_path):
+            return "Video not found", 404
+        
+        # Determine mimetype based on extension
+        ext = filename.lower().split('.')[-1]
+        mimetype_map = {
+            'mp4': 'video/mp4',
+            'avi': 'video/x-msvideo',
+            'mov': 'video/quicktime',
+            'mkv': 'video/x-matroska',
+            'webm': 'video/webm'
+        }
+        mimetype = mimetype_map.get(ext, 'video/mp4')
+        
+        # Serve file for inline viewing with range request support
+        # conditional=True enables support for HTTP range requests (required for video seeking)
+        return send_file(
+            requested_path, 
+            mimetype=mimetype,
+            conditional=True,
+            download_name=filename
+        )
+        
+    except Exception as e:
+        log_to_console(f"ERROR: Error serving video: {e}")
+        return "Error loading video", 500
 
 
 # -------------------------------
